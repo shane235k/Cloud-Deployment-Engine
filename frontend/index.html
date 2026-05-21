@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>P377</title>
+    <meta name="description" content="P377: deploy any Git repository to production in seconds. Watch live build logs and track deployment state changes." />
+
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+
+    <!-- Tailwind CSS CDN (Play) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+            colors: {
+              'vbg':   '#000000',
+              'vbg1':  '#0a0a0a',
+              'vbg2':  '#111111',
+              'vbg3':  '#1a1a1a',
+              'vborder': '#333333',
+              'vfg2':  '#a1a1a1',
+              'vsuccess': '#50e3c2',
+              'verror':   '#ff5858',
+              'vwarn':    '#f5a623',
+              'vblue':    '#0070f3',
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="dark">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

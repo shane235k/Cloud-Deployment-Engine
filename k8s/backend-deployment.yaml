@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: backend-deployment
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: backend
+
+  template:
+    metadata:
+      labels:
+        app: backend
+
+    spec:
+      containers:
+        - name: backend
+          image: p377-backend:v2
+          imagePullPolicy: Never
+
+          ports:
+            - containerPort: 5000
+
+          envFrom:
+            - secretRef:
+                name: backend-secret
+
+          volumeMounts:
+            - name: ssh-key
+              mountPath: /app/keys/p377-key.pem
+              subPath: p377-key.pem
+              readOnly: true
+
+      volumes:
+        - name: ssh-key
+          secret:
+            secretName: p377-ssh-key

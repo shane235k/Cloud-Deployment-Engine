@@ -1,0 +1,429 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'REPO_URL', defaultValue: '', description: 'GitHub repository URL')
+        string(name: 'DEPLOYMENT_ID', defaultValue: '', description: 'Deployment ID')
+    }
+
+    environment {
+        // Backend API
+        BACKEND_URL = 'http://host.docker.internal:5000'
+
+        // Terraform
+        TF_DIR = '/var/jenkins_home/terraform'
+
+        // SSH
+        SSH_KEY = '/tmp/p377-key.pem'
+        SSH_USER = 'ubuntu'
+
+        // AWS
+        AWS_PAGER                    = ''
+        AWS_SHARED_CREDENTIALS_FILE  = '/var/jenkins_home/.aws/credentials'
+        AWS_CONFIG_FILE              = '/var/jenkins_home/.aws/config'
+        AWS_DEFAULT_REGION           = 'us-east-2'
+
+        // Resource names
+        IMAGE_NAME    = "react-app:${params.DEPLOYMENT_ID}"
+        RESOURCE_NAME = "react-app-${params.DEPLOYMENT_ID}"
+    }
+
+    stages {
+        stage('Verify AWS Credentials') {
+            steps {
+                sh '''
+                    aws sts get-caller-identity
+                '''
+            }
+        }
+        stage('Prepare SSH Key') {
+            steps {
+                sh '''
+                    cp /var/jenkins_home/p377-key.pem /tmp/p377-key.pem
+                    chmod 400 /tmp/p377-key.pem
+                '''
+            }
+        }
+        stage('Clean Workspace') {
+            steps {
+                deleteDir()
+
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Workspace cleaned."}' || true
+                '''
+            }
+        }
+
+        stage('Clone Application Repository') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Cloning repository..."}' || true
+
+                    git clone "${REPO_URL}" app
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Repository cloned successfully."}' || true
+                '''
+            }
+        }
+
+        stage('Generate Dockerfile') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Generating Dockerfile..."}' || true
+
+                    cat > app/Dockerfile <<'EOF'
+FROM node:22
+
+WORKDIR /app
+
+COPY . .
+
+RUN npm install
+RUN npm run build
+RUN npm install -g serve
+
+EXPOSE 3000
+
+CMD ["serve", "-s", "dist", "-l", "3000"]
+EOF
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Dockerfile generated."}' || true
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Building Docker image..."}' || true
+
+                    cd app
+                    docker build -t "${IMAGE_NAME}" .
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Docker image built successfully."}' || true
+                '''
+            }
+        }
+
+        stage('Provision AWS Infrastructure') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Provisioning AWS infrastructure with Terraform..."}' || true
+
+                    cd "${TF_DIR}"
+                    terraform init -input=false
+                    terraform apply -auto-approve -input=false
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"AWS infrastructure provisioned successfully."}' || true
+                '''
+            }
+        }
+
+        stage('Get EC2 Outputs') {
+            steps {
+                script {
+                    env.INSTANCE_ID = sh(
+                        script: '''
+                            cd "${TF_DIR}"
+                            terraform output -raw instance_id
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.PUBLIC_IP = sh(
+                        script: '''
+                            cd "${TF_DIR}"
+                            terraform output -raw public_ip
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh """
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"EC2 Instance ID: ${INSTANCE_ID}, Public IP: ${PUBLIC_IP}"}' || true
+                """
+            }
+        }
+        stage('Clear SSH Known Host') {
+            steps {
+                sh '''
+                    mkdir -p /root/.ssh
+                    ssh-keygen -R "${PUBLIC_IP}" >/dev/null 2>&1 || true
+                '''
+            }
+        }
+        stage('Wait for AWS Status Checks') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Waiting for EC2 instance status checks..."}' || true
+
+                    aws ec2 wait instance-status-ok \
+                      --instance-ids "${INSTANCE_ID}"
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"EC2 instance passed AWS status checks."}' || true
+                '''
+            }
+        }
+
+        stage('Test SSH Connection') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Testing SSH connection..."}' || true
+
+                    timeout 300 bash -c '
+                        until ssh \
+                            -o StrictHostKeyChecking=no \
+                            -o ConnectTimeout=10 \
+                            -i "${SSH_KEY}" \
+                            ${SSH_USER}@${PUBLIC_IP} \
+                            "echo SSH Ready" >/dev/null 2>&1
+                        do
+                            echo "Waiting for SSH..."
+                            sleep 10
+                        done
+                    '
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"SSH connection established successfully."}' || true
+                '''
+            }
+        }
+
+        stage('Wait for K3s') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Waiting for k3s cluster to become ready..."}' || true
+
+                    timeout 900 bash -c '
+                        until ssh \
+                            -o StrictHostKeyChecking=no \
+                            -i "${SSH_KEY}" \
+                            ${SSH_USER}@${PUBLIC_IP} \
+                            "sudo k3s kubectl get nodes >/dev/null 2>&1"
+                        do
+                            echo "Waiting for k3s..."
+                            sleep 10
+                        done
+                    '
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"k3s cluster is ready."}' || true
+                '''
+            }
+        }
+        stage('Install Monitoring Stack') {
+    steps {
+        sh '''
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d '{"log":"Checking Prometheus..."}' || true
+
+            ssh \
+                -o StrictHostKeyChecking=no \
+                -i "${SSH_KEY}" \
+                ${SSH_USER}@${PUBLIC_IP} <<'EOF'
+set -e
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# Install Helm if missing
+if ! command -v helm >/dev/null 2>&1; then
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
+# Install monitoring namespace if missing
+if ! sudo k3s kubectl get namespace monitoring >/dev/null 2>&1; then
+    sudo k3s kubectl create namespace monitoring
+fi
+
+# Install Prometheus only if not already installed
+if ! helm status monitoring -n monitoring >/dev/null 2>&1; then
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo update
+
+    helm install monitoring prometheus-community/prometheus \
+        --namespace monitoring \
+        --set server.service.type=NodePort \
+        --set alertmanager.enabled=false \
+        --set pushgateway.enabled=false \
+        --set nodeExporter.enabled=false \
+        --set kubeStateMetrics.enabled=true
+fi
+EOF
+
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d '{"log":"Prometheus is ready."}' || true
+        '''
+
+        script {
+    env.PROMETHEUS_PORT = sh(
+        script: '''
+            ssh \
+                -o StrictHostKeyChecking=no \
+                -i "${SSH_KEY}" \
+                ${SSH_USER}@${PUBLIC_IP} \
+                "sudo k3s kubectl get svc -n monitoring monitoring-prometheus-server -o jsonpath='{.spec.ports[0].nodePort}'"
+        ''',
+        returnStdout: true
+    ).trim()
+
+    env.PROMETHEUS_URL = "http://${env.PUBLIC_IP}:${env.PROMETHEUS_PORT}"
+}
+
+        sh '''
+            curl -s -X POST ${BACKEND_URL}/monitoring/config \
+              -H "Content-Type: application/json" \
+              -d "{\"prometheusUrl\":\"${PROMETHEUS_URL}\"}" || true
+
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d "{\"log\":\"Prometheus URL: ${PROMETHEUS_URL}\"}" || true
+        '''
+    }
+}
+        stage('Transfer Docker Image') {
+            steps {
+                sh '''
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Transferring Docker image to EC2..."}' || true
+        
+                    docker save "${IMAGE_NAME}" -o image.tar
+        
+                    scp \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        image.tar \
+                        ${SSH_USER}@${PUBLIC_IP}:~/image.tar
+        
+                    # Import image into k3s containerd (not Docker)
+                    ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s ctr images import ~/image.tar"
+        
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d '{"log":"Docker image transferred and imported into k3s successfully."}' || true
+                '''
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+    steps {
+        sh '''
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d '{"log":"Deploying application to Kubernetes..."}' || true
+
+            ssh \
+                -o StrictHostKeyChecking=no \
+                -i "${SSH_KEY}" \
+                ${SSH_USER}@${PUBLIC_IP} <<EOF
+set -e
+
+sudo k3s kubectl delete deployment ${RESOURCE_NAME} --ignore-not-found
+sudo k3s kubectl delete service ${RESOURCE_NAME} --ignore-not-found
+
+sudo k3s kubectl create deployment ${RESOURCE_NAME} \
+  --image=${IMAGE_NAME}
+
+sudo k3s kubectl patch deployment ${RESOURCE_NAME} \
+  -p '{"spec":{"template":{"spec":{"containers":[{"name":"react-app","imagePullPolicy":"Never"}]}}}}'
+
+sudo k3s kubectl expose deployment ${RESOURCE_NAME} \
+  --type=NodePort \
+  --port=3000 \
+  --target-port=3000
+
+sudo k3s kubectl rollout status deployment/${RESOURCE_NAME} --timeout=300s
+EOF
+
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d '{"log":"Application deployed to Kubernetes successfully."}' || true
+        '''
+    }
+}
+
+        stage('Get Application URL') {
+    steps {
+        script {
+            env.NODE_PORT = sh(
+                script: '''
+                    ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get service ${RESOURCE_NAME} -o jsonpath='{.spec.ports[0].nodePort}'"
+                ''',
+                returnStdout: true
+            ).trim()
+
+            env.APP_URL = "http://${env.PUBLIC_IP}:${env.NODE_PORT}"
+        }
+
+        sh """
+            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+              -H "Content-Type: application/json" \
+              -d '{"status":"RUNNING","url":"${APP_URL}","log":"Application deployed successfully. URL: ${APP_URL}"}' || true
+        """
+    }
+}
+    }
+
+    post {
+        success {
+            sh '''
+                curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                  -H "Content-Type: application/json" \
+                  -d '{"log":"Jenkins pipeline completed successfully."}' || true
+            '''
+        }
+
+        failure {
+            sh '''
+                curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                  -H "Content-Type: application/json" \
+                  -d '{"status":"FAILED","log":"Jenkins pipeline failed."}' || true
+            '''
+        }
+
+        always {
+            sh '''
+                rm -f image.tar || true
+            '''
+        }
+    }
+}

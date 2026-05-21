@@ -1,0 +1,76 @@
+/* ── CSS Variables (Vercel / Next.js palette) ──────────── */
+:root {
+  --bg:          #000000;
+  --bg-1:        #0a0a0a;
+  --bg-2:        #111111;
+  --bg-3:        #1a1a1a;
+  --border:      #1a1a1a;
+  --border-mid:  #222222;
+  --border-hi:   #333333;
+  --fg:          #ffffff;
+  --fg-1:        #ededed;
+  --fg-2:        #a1a1a1;
+  --fg-3:        #666666;
+  --fg-4:        #444444;
+  --success:     #50e3c2;
+  --error:       #ff5858;
+  --warning:     #f5a623;
+  --blue:        #0070f3;
+  --blue-hi:     #3291ff;
+  --radius:      6px;
+  --radius-lg:   8px;
+  --transition:  0.15s ease;
+}
+
+/* ── Global reset ───────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg-1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; font-family: inherit; }
+input, textarea, select { font-family: inherit; }
+
+/* ── Scrollbar ──────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-4); }
+
+/* ── Animations ─────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes log-slide {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+
+/* ── Utility ────────────────────────────────────────────── */
+.fade-in  { animation: fadeIn 0.2s ease forwards; }
+.mono     { font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace; font-size: 12.5px; }
