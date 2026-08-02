@@ -44,6 +44,22 @@ global.runtimePrometheusUrl =
 
 app.use(cors());
 app.use(express.json());
+app.use((req, res, next) => {
+  const end = httpRequestDuration.startTimer();
+
+  httpRequestCounter.inc();
+
+  res.on('finish', () => {
+    end();
+  });
+
+  next();
+});
+app.get('/metrics', async (req, res) => {
+  res.set('Content-Type', client.register.contentType);
+
+  res.end(await client.register.metrics());
+});
 function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
 
@@ -65,6 +81,23 @@ function authenticate(req, res, next) {
     });
   }
 }
+const client = require('prom-client');
+
+// Collect default Node.js metrics
+client.collectDefaultMetrics();
+
+// Total HTTP requests counter
+const httpRequestCounter = new client.Counter({
+  name: 'p377_http_requests_total',
+  help: 'Total number of HTTP requests',
+});
+
+// HTTP request duration histogram
+const httpRequestDuration = new client.Histogram({
+  name: 'p377_http_request_duration_seconds',
+  help: 'HTTP request duration in seconds',
+  buckets: [0.1, 0.5, 1, 2, 5],
+});
 app.post("/monitoring/config", (req, res) => {
   const { prometheusUrl, grafanaUrl } =
     req.body;
@@ -637,7 +670,7 @@ app.post("/deployments/:id/start", async (req, res) => {
         encoding: "utf8",
         shell: true
       }).trim();
-      
+
       if (newPodName) {
         console.log("Updating pod name after restart to:", newPodName);
         deployment.podName = newPodName;
@@ -665,6 +698,55 @@ app.post("/deployments/:id/start", async (req, res) => {
     });
   }
 });
+
+// DELETE DEPLOYMENT
+app.delete("/deployments/:id", async (req, res) => {
+  try {
+    const deployment = await Deployment.findById(req.params.id);
+
+    if (!deployment) {
+      return res.status(404).json({ error: "Deployment not found" });
+    }
+
+    // Try to cleanup Kubernetes resources if metadata exists
+    if (deployment.deploymentName) {
+      try {
+        if (deployment.url) {
+          const publicIp = new URL(deployment.url).hostname;
+          const sshKey = process.env.SSH_KEY_PATH;
+          const sshUser = process.env.SSH_USER || "ubuntu";
+
+          if (sshKey) {
+            const deleteCmd = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${sshKey}" ${sshUser}@${publicIp} "sudo k3s kubectl delete deployment ${deployment.deploymentName} --ignore-not-found && sudo k3s kubectl delete service ${deployment.serviceName || deployment.deploymentName} --ignore-not-found"`;
+            execSync(deleteCmd, { stdio: "pipe", encoding: "utf8", shell: true });
+          }
+        } else {
+          // Fallback local cleanup if running locally
+          try {
+            execSync(`kubectl delete deployment ${deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
+            execSync(`kubectl delete service ${deployment.serviceName || deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
+          } catch (_) {}
+        }
+      } catch (k8sErr) {
+        console.warn(`Warning: Failed to cleanup Kubernetes resources for deployment ${req.params.id}: ${k8sErr.message}`);
+      }
+    }
+
+    await Deployment.findByIdAndDelete(req.params.id);
+
+    res.json({
+      success: true,
+      message: "Deployment deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Delete deployment error:", error);
+    res.status(500).json({
+      error: "Failed to delete deployment",
+      details: error.message,
+    });
+  }
+});
+
 app.get("/monitoring", async (req, res) => {
   try {
     const totalDeployments =
@@ -915,7 +997,25 @@ app.get("/deployments/:id/metrics", async (req, res) => {
   }
 });
 const { queryPrometheus } = require("./prometheus");
+app.get("/jenkins-cred", async (req, res) => {
+  try {
+    const jenkinsUrl = process.env.JENKINS_URL;
+    const jenkinsUser = process.env.JENKINS_USER;
+    const jenkinsToken = process.env.JENKINS_TOKEN;
+    res.json({
+      jenkinsUrl,
+      jenkinsUser,
+      jenkinsToken,
+    });
+  } catch (error) {
+    console.error("Jenkins cred error:", error);
 
+    res.status(500).json({
+      error: "Failed to fetch Jenkins creds",
+      details: error.message,
+    });
+  }
+})
 app.get("/test-prometheus", async (req, res) => {
   try {
     // Count all running pods in the cluster

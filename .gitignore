@@ -34,7 +34,7 @@ build/
 *.tf
 !main.tf
 !outputs.tf
-
+jenkins-data
 # IDE Files
 .vscode/
 .idea/

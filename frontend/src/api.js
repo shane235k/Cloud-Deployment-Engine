@@ -34,6 +34,11 @@ export async function stopDeployment(id) {
   const response = await api.post(`/deployments/${id}/stop`);
   return response.data;
 }
+
+export async function deleteDeployment(id) {
+  const response = await api.delete(`/deployments/${id}`);
+  return response.data;
+}
 export async function createDeployment(deploymentData) {
   const response = await api.post('/deploy', deploymentData);
   return response.data;

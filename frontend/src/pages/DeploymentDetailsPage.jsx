@@ -4,7 +4,8 @@ import {
   getDeployment,
   getDeploymentMetrics,
   startDeployment,
-  stopDeployment
+  stopDeployment,
+  deleteDeployment
 } from '../api';
 
 function getStatusClass(status) {
@@ -93,6 +94,23 @@ export default function DeploymentDetailsPage() {
     }
   };
 
+  const handleDelete = async () => {
+    if (actionLoading) return;
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete "${deployment.projectName}"? This will remove all Kubernetes resources and delete the project record.`
+    );
+    if (!confirmDelete) return;
+
+    setActionLoading(true);
+    try {
+      await deleteDeployment(id);
+      navigate('/dashboard/projects');
+    } catch (e) {
+      alert(e.response?.data?.error || 'Failed to delete deployment');
+      setActionLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="vercel-projects-page" style={{ display: 'flex', justifyContent: 'center', paddingTop: '100px' }}>
@@ -171,6 +189,22 @@ export default function DeploymentDetailsPage() {
               {actionLoading ? 'Starting...' : 'Start'}
             </button>
           )}
+
+          {/* Delete control */}
+          <button
+            onClick={handleDelete}
+            disabled={actionLoading}
+            style={{
+              padding: '7px 14px', borderRadius: '6px', border: '1px solid #333',
+              background: '#111', color: '#ff4d4f', fontSize: '13px',
+              fontWeight: '500', cursor: actionLoading ? 'not-allowed' : 'pointer',
+              opacity: actionLoading ? 0.5 : 1, display: 'flex', alignItems: 'center', gap: '6px'
+            }}
+            title="Delete deployment"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            {actionLoading ? 'Deleting...' : 'Delete'}
+          </button>
         </div>
       </div>
 

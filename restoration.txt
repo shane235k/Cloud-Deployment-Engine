@@ -1,0 +1,24 @@
+## Backend Secret
+
+kubectl create secret generic backend-secret --from-env-file=backend/.env
+
+## SSH Secret
+
+kubectl create secret generic p377-ssh-key --from-file=p377-key.pem="..."
+
+## run Jenkins container
+
+docker run -d `
+--name kubedeploy-jenkins `
+-p 8080:8080 `
+-p 50000:50000 `
+-v jenkins_home:/var/jenkins_home `
+-v //var/run/docker.sock:/var/run/docker.sock `
+-v C:\nvm\COLLEGE\DEVOPS\KubeDeploy\jenkins-data\terraform:/var/jenkins_home/terraform `
+-v C:\nvm\COLLEGE\DEVOPS\KubeDeploy\jenkins-data\aws:/var/jenkins_home/.aws `
+-v C:\nvm\COLLEGE\DEVOPS\KubeDeploy\jenkins-data\keys\p377-key.pem:/var/jenkins_home/p377-key.pem `
+kubedeploy-jenkins
+
+## change socket permission 
+
+chmod 666 /var/run/docker.sock

@@ -1,0 +1,304 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Hardware Architecture">
+    <mxGraphModel dx="1920" dy="1080" grid="1" gridSize="10" guides="1"
+      tooltips="1" connect="1" arrows="1" fold="1" page="1"
+      pageScale="1" pageWidth="1600" pageHeight="900"
+      math="0" shadow="0">
+
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- MAIN TITLE -->
+        <mxCell id="title"
+          value="Hardware-Enforced Command Authorization and Immutable Audit System"
+          style="text;html=1;strokeColor=none;fillColor=none;fontSize=26;fontStyle=1;align=center;"
+          vertex="1" parent="1">
+          <mxGeometry x="300" y="10" width="1000" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- USER AUTHENTICATION LAYER -->
+        <mxCell id="authLayer"
+          value="USER AUTHENTICATION LAYER"
+          style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fontStyle=1;fontSize=18;"
+          vertex="1" parent="1">
+          <mxGeometry x="20" y="60" width="500" height="340" as="geometry"/>
+        </mxCell>
+
+        <!-- USB TOKEN -->
+        <mxCell id="usbToken"
+          value="USB Security Token"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="100" y="105" width="290" height="230" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="secureElement"
+          value="Secure Element"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="115" y="130" width="260" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="privateKey"
+          value="Private Key"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="115" y="170" width="120" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="publicCert"
+          value="Public Key Certificate"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="255" y="170" width="120" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="cryptoEngine"
+          value="Cryptographic Signing Engine"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="115" y="220" width="260" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="trng"
+          value="True Random Number Generator (Optional)"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="115" y="275" width="260" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="privateKeyNote"
+          value="Private Key Never Leaves Token"
+          style="text;html=1;strokeColor=none;fillColor=none;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="410" y="120" width="120" height="50" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="usbHost"
+          value="USB Host Controller"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="410" y="260" width="90" height="55" as="geometry"/>
+        </mxCell>
+
+        <!-- MOTHERBOARD HARDWARE LAYER -->
+        <mxCell id="mbLayer"
+          value="MOTHERBOARD HARDWARE LAYER"
+          style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fontStyle=1;fontSize=18;"
+          vertex="1" parent="1">
+          <mxGeometry x="560" y="60" width="690" height="500" as="geometry"/>
+        </mxCell>
+
+        <!-- CPU -->
+        <mxCell id="cpu"
+          value="CPU"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=16;"
+          vertex="1" parent="1">
+          <mxGeometry x="610" y="110" width="90" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- RAM -->
+        <mxCell id="ram"
+          value="RAM"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=16;"
+          vertex="1" parent="1">
+          <mxGeometry x="760" y="125" width="100" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- SSD -->
+        <mxCell id="ssd"
+          value="SSD"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=16;"
+          vertex="1" parent="1">
+          <mxGeometry x="945" y="120" width="120" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- PCH -->
+        <mxCell id="pch"
+          value="Platform Controller Hub&#xa;(PCH / Chipset)"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="590" y="230" width="300" height="250" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="usbController"
+          value="USB Host Controller"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="620" y="290" width="100" height="50" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="spiController"
+          value="SPI Controller&#xa;(Serial Peripheral Interface)"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="745" y="315" width="120" height="70" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="ssdController"
+          value="SSD Controller"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="745" y="395" width="120" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="gpioController"
+          value="GPIO Interrupt Controller&#xa;(Input/Output)"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="745" y="445" width="120" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- Secure Controller IC -->
+        <mxCell id="secureIC"
+          value="Secure Controller IC"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=16;"
+          vertex="1" parent="1">
+          <mxGeometry x="970" y="220" width="240" height="300" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="secureMCU"
+          value="Secure Microcontroller"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="990" y="255" width="200" height="30" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="trng2"
+          value="TRNG"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="995" y="300" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="cryptoAccel"
+          value="Cryptographic Accelerator"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="1095" y="300" width="95" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="secureSRAM"
+          value="Secure SRAM"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="995" y="350" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="flash"
+          value="Secure Flash / EEPROM"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="1095" y="350" width="95" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="sessionKey"
+          value="Session Key Storage"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="995" y="400" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="counter"
+          value="Monotonic Counter"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="1095" y="400" width="95" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="policy"
+          value="Capability Policy Engine"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="995" y="450" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="authStatus"
+          value="Authentication Status Register"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=12;"
+          vertex="1" parent="1">
+          <mxGeometry x="1095" y="450" width="95" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- SOFTWARE STACK -->
+        <mxCell id="softwareLayer"
+          value="SOFTWARE STACK LAYER"
+          style="rounded=0;whiteSpace=wrap;html=1;dashed=1;fontStyle=1;fontSize=18;"
+          vertex="1" parent="1">
+          <mxGeometry x="1270" y="60" width="300" height="500" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="gui"
+          value="Administrative Management GUI"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="1295" y="105" width="250" height="90" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="backgroundService"
+          value="User-Space Background Service"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="1295" y="225" width="250" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="kernelDriver"
+          value="Kernel-Mode Security Driver"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="1295" y="295" width="250" height="80" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="spiDriver"
+          value="SPI Driver Interface"
+          style="rounded=0;whiteSpace=wrap;html=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="1295" y="400" width="250" height="45" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="firmware"
+          value="Secure Controller Firmware"
+          style="rounded=0;whiteSpace=wrap;html=1;fontStyle=1;fontSize=14;"
+          vertex="1" parent="1">
+          <mxGeometry x="1295" y="470" width="250" height="80" as="geometry"/>
+        </mxCell>
+
+        <!-- CONNECTIONS -->
+
+        <mxCell id="e1"
+          style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+          edge="1" parent="1" source="cpu" target="ram">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e2"
+          style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+          edge="1" parent="1" source="ram" target="ssd">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e3"
+          style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+          edge="1" parent="1" source="usbHost" target="usbController">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e4"
+          value="SPI"
+          style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+          edge="1" parent="1" source="spiController" target="secureIC">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="e5"
+          value="GPIO interrupt"
+          style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;"
+          edge="1" parent="1" source="gpioController" target="secureIC">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

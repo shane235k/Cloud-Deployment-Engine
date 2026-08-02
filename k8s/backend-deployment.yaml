@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: p377-backend:v2
+          image: p377-backend:v1
           imagePullPolicy: Never
 
           ports:
@@ -36,6 +36,7 @@ spec:
               readOnly: true
 
       volumes:
-        - name: ssh-key
-          secret:
-            secretName: p377-ssh-key
+          - name: ssh-key
+            secret:
+              secretName: p377-ssh-key
+              defaultMode: 0400
