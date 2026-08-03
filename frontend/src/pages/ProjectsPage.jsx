@@ -10,16 +10,16 @@ export default function ProjectsPage({ deployments = [] }) {
   const totalApps = deployments.length;
 
   return (
-    <div className="vercel-projects-page">
+    <div className="vercel-projects-page" style={{ background: '#000000', minHeight: '100vh', color: '#ffffff' }}>
       <div className="vp-header">
-        <div className="vp-search-container">
+        <div className="vp-search-container" style={{ background: '#0a0a0a', border: '1px solid #222' }}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-          <input type="text" placeholder="Search Projects..." />
+          <input type="text" placeholder="Search Projects..." style={{ background: 'transparent', color: '#ffffff' }} />
         </div>
         <div className="vp-actions">
-          <button className="vp-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg></button>
-          <button className="vp-btn-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
-          <button className="vp-btn-primary" onClick={() => navigate('/dashboard/new')}>
+          <button className="vp-btn-icon" style={{ background: '#0a0a0a', border: '1px solid #222', color: '#a1a1aa' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg></button>
+          <button className="vp-btn-icon" style={{ background: '#0a0a0a', border: '1px solid #222', color: '#a1a1aa' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
+          <button className="vp-btn-primary" onClick={() => navigate('/dashboard/new-project')} style={{ background: '#ffffff', color: '#000000', fontWeight: '700' }}>
             Add New...
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{marginLeft: '8px', width: '14px'}}><polyline points="6 9 12 15 18 9"></polyline></svg>
           </button>
@@ -27,14 +27,14 @@ export default function ProjectsPage({ deployments = [] }) {
       </div>
 
       <div className="vp-content-grid">
-        {/* Mock Usage & Alerts Sidebar from screenshot */}
+        {/* Usage & Alerts Sidebar */}
         <div className="vp-left-column">
           <div className="vp-section">
-            <div className="vp-section-header">Usage</div>
-            <div className="vp-card usage-card">
-              <div className="usage-header">
+            <div className="vp-section-header" style={{ color: '#888888' }}>Usage</div>
+            <div className="vp-card usage-card" style={{ background: '#0a0a0a', border: '1px solid #222', color: '#a1a1aa' }}>
+              <div className="usage-header" style={{ color: '#ffffff' }}>
                 <span>Account Usage</span>
-                <span className="upgrade-badge">Upgrade</span>
+                <span className="upgrade-badge" style={{ background: '#18181b', border: '1px solid #27272a', color: '#ffffff' }}>Upgrade</span>
               </div>
               <div className="usage-row">
                 <span className="usage-label"><span className="dot blue"></span> Total Deployments</span>
@@ -56,16 +56,16 @@ export default function ProjectsPage({ deployments = [] }) {
           </div>
 
           <div className="vp-section">
-            <div className="vp-section-header">Alerts</div>
-            <div className="vp-card alerts-card">
+            <div className="vp-section-header" style={{ color: '#888888' }}>Alerts</div>
+            <div className="vp-card alerts-card" style={{ background: '#0a0a0a', border: '1px solid #222', color: '#888888' }}>
               <p>Failed to load alerts</p>
             </div>
           </div>
 
           <div className="vp-section">
-            <div className="vp-section-header">Recent Previews</div>
-            <div className="vp-card previews-card">
-              <div className="preview-icon">
+            <div className="vp-section-header" style={{ color: '#888888' }}>Recent Previews</div>
+            <div className="vp-card previews-card" style={{ background: '#0a0a0a', border: '1px solid #222', color: '#888888' }}>
+              <div className="preview-icon" style={{ background: '#18181b' }}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4l3 3"></path></svg>
               </div>
               <p>Preview deployments that you have recently visited or created will appear here.</p>
@@ -75,52 +75,52 @@ export default function ProjectsPage({ deployments = [] }) {
 
         {/* Projects Grid */}
         <div className="vp-main-column">
-          <div className="vp-section-header" style={{ marginLeft: '12px' }}>Projects</div>
+          <div className="vp-section-header" style={{ marginLeft: '12px', color: '#888888' }}>Projects</div>
           <div className="vp-projects-grid">
             {deployments && deployments.length > 0 ? (
               deployments.map(dep => (
-                <Link to={`/dashboard/deployments/${dep._id}`} key={dep._id} className="vp-project-card">
+                <Link to={`/dashboard/deployments/${dep._id}`} key={dep._id} className="vp-project-card" style={{ background: '#000000', border: '1px solid #222', color: '#ffffff' }}>
                   <div className="vpc-header">
-                    <div className="vpc-icon">
+                    <div className="vpc-icon" style={{ background: '#18181b', border: '1px solid #27272a' }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle></svg>
                     </div>
                     <div className="vpc-title">
-                      <h3>{dep.projectName || dep.repoUrl.split('/').pop().replace('.git', '')}</h3>
-                      <span>{dep.repoUrl ? dep.repoUrl.replace('https://github.com/', '') : ''}</span>
+                      <h3 style={{ color: '#ffffff' }}>{dep.projectName || dep.repoUrl.split('/').pop().replace('.git', '')}</h3>
+                      <span style={{ color: '#888888' }}>{dep.repoUrl ? dep.repoUrl.replace('https://github.com/', '') : ''}</span>
                     </div>
                     <div className="vpc-status">
                       <svg viewBox="0 0 24 24" fill="currentColor" className={`status-icon ${dep.status}`}><circle cx="12" cy="12" r="6"></circle></svg>
                     </div>
                   </div>
                   <div className="vpc-meta">
-                    <span className="vpc-branch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span>
-                    <span className="vpc-time">{new Date(dep.createdAt).toLocaleDateString()}</span>
+                    <span className="vpc-branch" style={{ color: '#888888' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span>
+                    <span className="vpc-time" style={{ color: '#888888' }}>{new Date(dep.createdAt).toLocaleDateString()}</span>
                   </div>
                 </Link>
               ))
             ) : (
               <>
-                <div className="vp-project-card">
+                <div className="vp-project-card" style={{ background: '#000000', border: '1px solid #222', color: '#ffffff' }}>
                   <div className="vpc-header">
-                    <div className="vpc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle></svg></div>
+                    <div className="vpc-icon" style={{ background: '#18181b', border: '1px solid #27272a' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle></svg></div>
                     <div className="vpc-title">
-                      <h3>portfolio-235k</h3>
-                      <span>shane235k/Portfolio</span>
+                      <h3 style={{ color: '#ffffff' }}>portfolio-235k</h3>
+                      <span style={{ color: '#888888' }}>shane235k/Portfolio</span>
                     </div>
                     <div className="vpc-status"><svg viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="12" r="8"></circle><path fill="#000" d="M9 12l2 2 4-4"></path></svg></div>
                   </div>
-                  <div className="vpc-meta"><span className="vpc-branch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span><span className="vpc-time">Mar 27</span></div>
+                  <div className="vpc-meta"><span className="vpc-branch" style={{ color: '#888888' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span><span className="vpc-time" style={{ color: '#888888' }}>Mar 27</span></div>
                 </div>
-                <div className="vp-project-card">
+                <div className="vp-project-card" style={{ background: '#000000', border: '1px solid #222', color: '#ffffff' }}>
                   <div className="vpc-header">
-                    <div className="vpc-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 22 22 22"></polygon></svg></div>
+                    <div className="vpc-icon" style={{ background: '#18181b', border: '1px solid #27272a' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="12 2 2 22 22 22"></polygon></svg></div>
                     <div className="vpc-title">
-                      <h3>aryan-portfolio</h3>
-                      <span>shane235k/Aryan-Portfolio</span>
+                      <h3 style={{ color: '#ffffff' }}>aryan-portfolio</h3>
+                      <span style={{ color: '#888888' }}>shane235k/Aryan-Portfolio</span>
                     </div>
                     <div className="vpc-status"><svg viewBox="0 0 24 24" fill="#fff"><circle cx="12" cy="12" r="8"></circle><path fill="#000" d="M9 12l2 2 4-4"></path></svg></div>
                   </div>
-                  <div className="vpc-meta"><span className="vpc-branch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span><span className="vpc-time">Mar 23</span></div>
+                  <div className="vpc-meta"><span className="vpc-branch" style={{ color: '#888888' }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg> main</span><span className="vpc-time" style={{ color: '#888888' }}>Mar 23</span></div>
                 </div>
               </>
             )}

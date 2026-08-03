@@ -104,7 +104,7 @@ export default function NewProjectPage() {
     try {
       const { clientId } = await getGithubClientId();
       // Use the backend URL as redirect_uri, which matches what's registered in GitHub
-      const redirectUri = 'http://localhost:5000/auth/github/callback';
+      const redirectUri = `${window.location.origin}/auth/github/callback`;
       window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&scope=repo&redirect_uri=${encodeURIComponent(redirectUri)}`;
     } catch {
       alert('Failed to initiate GitHub login');

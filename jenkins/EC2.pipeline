@@ -4,24 +4,17 @@ pipeline {
     parameters {
         string(name: 'REPO_URL', defaultValue: '', description: 'GitHub repository URL')
         string(name: 'DEPLOYMENT_ID', defaultValue: '', description: 'Deployment ID')
+        string(name: 'TARGET_SERVER', defaultValue: '', description: 'Target Deployment Server IP')
     }
 
     environment {
         // Backend API
-        BACKEND_URL = 'http://host.docker.internal:5000'
-
-        // Terraform
-        TF_DIR = '/var/jenkins_home/terraform'
+        //BACKEND_URL = 'http://host.docker.internal:5000'
+        BACKEND_URL = 'http://host.docker.internal:30007'
 
         // SSH
         SSH_KEY = '/tmp/p377-key.pem'
         SSH_USER = 'ubuntu'
-
-        // AWS
-        AWS_PAGER                    = ''
-        AWS_SHARED_CREDENTIALS_FILE  = '/var/jenkins_home/.aws/credentials'
-        AWS_CONFIG_FILE              = '/var/jenkins_home/.aws/config'
-        AWS_DEFAULT_REGION           = 'us-east-2'
 
         // Resource names
         IMAGE_NAME    = "react-app:${params.DEPLOYMENT_ID}"
@@ -29,29 +22,80 @@ pipeline {
     }
 
     stages {
-        stage('Verify AWS Credentials') {
-            steps {
-                sh '''
-                    aws sts get-caller-identity
-                '''
-            }
-        }
         stage('Prepare SSH Key') {
             steps {
                 sh '''
-                    cp /var/jenkins_home/p377-key.pem /tmp/p377-key.pem
+                    set -ex
+        
+                    whoami
+                    id
+                    pwd
+        
+                    ls -ld /tmp
+                    ls -l /tmp || true
+                    ls -l /var/jenkins_home/p377-key.pem
+        
+                    rm -f /tmp/p377-key.pem || true
+        
+                    cp -v /var/jenkins_home/p377-key.pem /tmp/p377-key.pem
                     chmod 400 /tmp/p377-key.pem
+        
+                    ls -l /tmp/p377-key.pem
+        
+                    KEY_FINGERPRINT=$(ssh-keygen -l -f /tmp/p377-key.pem | awk '{print $2, $4}')
+                    KEY_SIZE=$(ssh-keygen -l -f /tmp/p377-key.pem | awk '{print $1}')
+        
+                    MSG="SSH key prepared at /tmp/p377-key.pem | Key size: ${KEY_SIZE} bits | Fingerprint: ${KEY_FINGERPRINT}"
+        
+                    python3 -c "import json,sys; print(json.dumps({'log':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                        -H "Content-Type: application/json" \
+                        -d @- || true
                 '''
             }
         }
+
+        stage('Acquire Target Server') {
+            steps {
+                script {
+                    if (!params.TARGET_SERVER || params.TARGET_SERVER.trim() == '') {
+                        sh '''
+                            MSG="Target deployment server acquisition FAILED: TARGET_SERVER parameter is missing or empty."
+                            python3 -c "import json,sys; print(json.dumps({'log':sys.argv[1]}))" "$MSG" | \
+                                curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                                  -H "Content-Type: application/json" \
+                                  -d @- || true
+                        '''
+                        error("TARGET_SERVER parameter is missing or empty. Cannot proceed with deployment.")
+                    }
+                    env.PUBLIC_IP = params.TARGET_SERVER.trim()
+                }
+
+                sh '''
+                    MSG="Acquired target deployment server. Target Server IP: ${PUBLIC_IP}"
+                    python3 -c "import json,sys; print(json.dumps({'log':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+                '''
+            }
+        }
+
         stage('Clean Workspace') {
             steps {
                 deleteDir()
 
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Workspace cleaned."}' || true
+                    WORKSPACE_PATH=$(pwd)
+                    HOSTNAME=$(hostname)
+                    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+                    MSG="Workspace cleaned successfully. Path: $WORKSPACE_PATH | Host: $HOSTNAME | Timestamp (UTC): $TIMESTAMP | Deployment ID: ${DEPLOYMENT_ID}"
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
                 '''
             }
         }
@@ -59,15 +103,58 @@ pipeline {
         stage('Clone Application Repository') {
             steps {
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Cloning repository..."}' || true
+                    START_TIME=$(date +%s)
 
-                    git clone "${REPO_URL}" app
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Initiating git clone from: ${REPO_URL} ΓÇö fetching repository metadata and all refs..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
 
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Repository cloned successfully."}' || true
+                    # Clone with verbose output captured
+                    GIT_OUTPUT=$(git clone "${REPO_URL}" app 2>&1)
+                    EXIT_CODE=$?
+
+                    END_TIME=$(date +%s)
+                    ELAPSED=$((END_TIME - START_TIME))
+
+                    if [ $EXIT_CODE -ne 0 ]; then
+                        python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Git clone FAILED after ${ELAPSED}s. Error output: $GIT_OUTPUT" | \
+                            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                              -H "Content-Type: application/json" \
+                              -d @- || true
+                        exit 1
+                    fi
+
+                    # Gather repo metadata post-clone
+                    BRANCH=$(cd app && git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+                    COMMIT_HASH=$(cd app && git rev-parse HEAD 2>/dev/null || echo "unknown")
+                    COMMIT_SHORT=$(cd app && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+                    COMMIT_MSG=$(cd app && git log -1 --pretty=format:"%s" 2>/dev/null || echo "unknown")
+                    COMMIT_AUTHOR=$(cd app && git log -1 --pretty=format:"%an <%ae>" 2>/dev/null || echo "unknown")
+                    COMMIT_DATE=$(cd app && git log -1 --pretty=format:"%ad" --date=format:"%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown")
+                    TOTAL_COMMITS=$(cd app && git rev-list --count HEAD 2>/dev/null || echo "unknown")
+                    FILE_COUNT=$(find app -type f | wc -l | tr -d ' ')
+                    REPO_SIZE=$(du -sh app 2>/dev/null | cut -f1)
+
+                    MSG="Repository cloned successfully in ${ELAPSED}s. Branch: $BRANCH | Commit: $COMMIT_SHORT ($COMMIT_HASH) | Message: \"$COMMIT_MSG\" | Author: $COMMIT_AUTHOR | Committed at: $COMMIT_DATE | Total commits on branch: $TOTAL_COMMITS | Files on disk: $FILE_COUNT | Repo size: $REPO_SIZE"
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
+                    # Also check if package.json is present and extract app name/version
+                    if [ -f app/package.json ]; then
+                        APP_NAME=$(cat app/package.json | grep -o '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
+                        APP_VERSION=$(cat app/package.json | grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
+                        NODE_ENGINE=$(cat app/package.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('engines',{}).get('node','not specified'))" 2>/dev/null || echo "not specified")
+                        SCRIPT_KEYS=$(cat app/package.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('scripts',{}).keys()))" 2>/dev/null || echo "unknown")
+
+                        python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "package.json detected. App name: $APP_NAME | Version: $APP_VERSION | Required Node engine: $NODE_ENGINE | Available npm scripts: $SCRIPT_KEYS" | \
+                            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                              -H "Content-Type: application/json" \
+                              -d @- || true
+                    fi
                 '''
             }
         }
@@ -75,29 +162,36 @@ pipeline {
         stage('Generate Dockerfile') {
             steps {
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Generating Dockerfile..."}' || true
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Generating multi-stage Dockerfile. Stage 1 (builder): node:22 ΓÇö will run npm install + npm run build. Stage 2 (runtime): nginx:alpine ΓÇö serves compiled static assets from /usr/share/nginx/html on port 80." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
 
                     cat > app/Dockerfile <<'EOF'
-FROM node:22
-
+FROM node:22 AS builder
 WORKDIR /app
 
-COPY . .
-
+COPY package*.json ./
 RUN npm install
+
+COPY . .
 RUN npm run build
-RUN npm install -g serve
 
-EXPOSE 3000
+FROM nginx:alpine
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-CMD ["serve", "-s", "dist", "-l", "3000"]
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
 EOF
 
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Dockerfile generated."}' || true
+                    LINE_COUNT=$(wc -l < app/Dockerfile)
+                    MSG="Dockerfile written to app/Dockerfile | Lines: $LINE_COUNT | Strategy: multi-stage build (builder ΓåÆ nginx:alpine) | Final image will NOT contain Node.js or node_modules ΓÇö only compiled dist assets are copied to the runtime stage, keeping the image lean"
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
                 '''
             }
         }
@@ -105,86 +199,82 @@ EOF
         stage('Build Docker Image') {
             steps {
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Building Docker image..."}' || true
+                    START_TIME=$(date +%s)
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Starting Docker build for image: ${IMAGE_NAME}. Using multi-stage Dockerfile. npm install and npm run build will execute inside the builder stage ΓÇö output streamed below..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
 
                     cd app
-                    docker build -t "${IMAGE_NAME}" .
 
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Docker image built successfully."}' || true
+                    # Build with plain progress to capture layer-by-layer output
+                    # Use a subshell to capture exit code without PIPESTATUS (dash-compatible)
+                    docker build --progress=plain -t "${IMAGE_NAME}" . 2>&1 | tee /tmp/docker_build.log; EXIT_CODE=$?
+                    # If tee swallowed the exit, re-check image existence as fallback
+                    docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1 || EXIT_CODE=1
+
+                    END_TIME=$(date +%s)
+                    ELAPSED=$((END_TIME - START_TIME))
+
+                    if [ $EXIT_CODE -ne 0 ]; then
+                        TAIL_LINES=$(tail -20 /tmp/docker_build.log)
+                        python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Docker build FAILED after ${ELAPSED}s. Last 20 lines of output: $TAIL_LINES" | \
+                            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                              -H "Content-Type: application/json" \
+                              -d @- || true
+                        exit 1
+                    fi
+
+                    # Collect image metadata ΓÇö use JSON output + python3 to avoid {{ }} Go template shell conflicts
+                    INSPECT_JSON=$(docker inspect "${IMAGE_NAME}" 2>/dev/null)
+                    IMAGE_ID=$(echo "$INSPECT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)[0]; print(d['Id'][7:19])" 2>/dev/null || echo "unknown")
+                    IMAGE_SIZE_BYTES=$(echo "$INSPECT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)[0]; print(d['Size'])" 2>/dev/null || echo "0")
+                    IMAGE_SIZE=$(echo "$IMAGE_SIZE_BYTES" | awk '{printf "%.1f MB", $1/1048576}')
+                    IMAGE_CREATED=$(echo "$INSPECT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)[0]; print(d['Created'][:19])" 2>/dev/null || echo "unknown")
+                    LAYER_COUNT=$(echo "$INSPECT_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin)[0]; print(len(d['RootFS']['Layers']))" 2>/dev/null || echo "unknown")
+                    BASE_IMAGE="nginx:alpine"
+
+                    # Extract npm install + build lines from log
+                    NPM_ADDED=$(grep -i "added [0-9]* packages" /tmp/docker_build.log | tail -1 || echo "")
+                    BUILD_RESULT=$(grep -iE "vite|webpack|build|dist|chunks|modules" /tmp/docker_build.log | tail -5 | tr '\n' ' ' || echo "")
+                    TOTAL_STEPS=$(grep -cE "^[#][0-9]" /tmp/docker_build.log 2>/dev/null || echo "unknown")
+
+                    MSG="Docker image built successfully in ${ELAPSED}s. Image: ${IMAGE_NAME} | ID: sha256:$IMAGE_ID | Final size: $IMAGE_SIZE | Layers: $LAYER_COUNT | Base runtime image: $BASE_IMAGE | Build steps completed: $TOTAL_STEPS"
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
+                    if [ -n "$NPM_ADDED" ]; then
+                        python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "npm install summary (from build): $NPM_ADDED" | \
+                            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                              -H "Content-Type: application/json" \
+                              -d @- || true
+                    fi
+
+                    if [ -n "$BUILD_RESULT" ]; then
+                        python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Build output summary (from npm run build): $BUILD_RESULT" | \
+                            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                              -H "Content-Type: application/json" \
+                              -d @- || true
+                    fi
                 '''
             }
         }
 
-        stage('Provision AWS Infrastructure') {
-            steps {
-                sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Provisioning AWS infrastructure with Terraform..."}' || true
-
-                    cd "${TF_DIR}"
-                    terraform init -input=false
-                    terraform apply -auto-approve -input=false
-
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"AWS infrastructure provisioned successfully."}' || true
-                '''
-            }
-        }
-
-        stage('Get EC2 Outputs') {
-            steps {
-                script {
-                    env.INSTANCE_ID = sh(
-                        script: '''
-                            cd "${TF_DIR}"
-                            terraform output -raw instance_id
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    env.PUBLIC_IP = sh(
-                        script: '''
-                            cd "${TF_DIR}"
-                            terraform output -raw public_ip
-                        ''',
-                        returnStdout: true
-                    ).trim()
-                }
-
-                sh """
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"EC2 Instance ID: ${INSTANCE_ID}, Public IP: ${PUBLIC_IP}"}' || true
-                """
-            }
-        }
         stage('Clear SSH Known Host') {
             steps {
                 sh '''
-                    mkdir -p /root/.ssh
-                    ssh-keygen -R "${PUBLIC_IP}" >/dev/null 2>&1 || true
-                '''
-            }
-        }
-        stage('Wait for AWS Status Checks') {
-            steps {
-                sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Waiting for EC2 instance status checks..."}' || true
+                    mkdir -p /var/jenkins_home/.ssh
+                    ssh-keygen -R "${PUBLIC_IP}" -f /var/jenkins_home/.ssh/known_hosts >/dev/null 2>&1 || true
+                    KNOWN_HOSTS_COUNT=$(wc -l < /var/jenkins_home/.ssh/known_hosts 2>/dev/null || echo "0")
+                    MSG="Cleared stale SSH known_hosts entry for ${PUBLIC_IP} to avoid host key conflicts. Remaining known_hosts entries: $KNOWN_HOSTS_COUNT"
 
-                    aws ec2 wait instance-status-ok \
-                      --instance-ids "${INSTANCE_ID}"
-
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"EC2 instance passed AWS status checks."}' || true
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
                 '''
             }
         }
@@ -192,9 +282,13 @@ EOF
         stage('Test SSH Connection') {
             steps {
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Testing SSH connection..."}' || true
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Attempting SSH connection to ${PUBLIC_IP} as user ${SSH_USER}. Will retry every 10 seconds for up to 300 seconds until the SSH daemon is responsive..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
+                    START_TIME=$(date +%s)
+                    ATTEMPTS=0
 
                     timeout 300 bash -c '
                         until ssh \
@@ -209,220 +303,266 @@ EOF
                         done
                     '
 
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"SSH connection established successfully."}' || true
+                    END_TIME=$(date +%s)
+                    ELAPSED=$((END_TIME - START_TIME))
+
+                    # Get SSH server version / OS details from the instance
+                    REMOTE_INFO=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "uname -a && uptime && free -h | grep Mem" 2>/dev/null || echo "info unavailable")
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "SSH connection established to ${PUBLIC_IP} in ${ELAPSED}s. Remote system info: $REMOTE_INFO" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
                 '''
             }
         }
 
-        stage('Wait for K3s') {
-            steps {
-                sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Waiting for k3s cluster to become ready..."}' || true
-
-                    timeout 900 bash -c '
-                        until ssh \
-                            -o StrictHostKeyChecking=no \
-                            -i "${SSH_KEY}" \
-                            ${SSH_USER}@${PUBLIC_IP} \
-                            "sudo k3s kubectl get nodes >/dev/null 2>&1"
-                        do
-                            echo "Waiting for k3s..."
-                            sleep 10
-                        done
-                    '
-
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"k3s cluster is ready."}' || true
-                '''
-            }
-        }
-        stage('Install Monitoring Stack') {
-    steps {
-        sh '''
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d '{"log":"Checking Prometheus..."}' || true
-
-            ssh \
-                -o StrictHostKeyChecking=no \
-                -i "${SSH_KEY}" \
-                ${SSH_USER}@${PUBLIC_IP} <<'EOF'
-set -e
-export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-
-# Install Helm if missing
-if ! command -v helm >/dev/null 2>&1; then
-    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
-fi
-
-# Install monitoring namespace if missing
-if ! sudo k3s kubectl get namespace monitoring >/dev/null 2>&1; then
-    sudo k3s kubectl create namespace monitoring
-fi
-
-# Install Prometheus only if not already installed
-if ! helm status monitoring -n monitoring >/dev/null 2>&1; then
-    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-    helm repo update
-
-    helm install monitoring prometheus-community/prometheus \
-        --namespace monitoring \
-        --set server.service.type=NodePort \
-        --set alertmanager.enabled=false \
-        --set pushgateway.enabled=false \
-        --set nodeExporter.enabled=false \
-        --set kubeStateMetrics.enabled=true
-fi
-EOF
-
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d '{"log":"Prometheus is ready."}' || true
-        '''
-
-        script {
-    env.PROMETHEUS_PORT = sh(
-        script: '''
-            ssh \
-                -o StrictHostKeyChecking=no \
-                -i "${SSH_KEY}" \
-                ${SSH_USER}@${PUBLIC_IP} \
-                "sudo k3s kubectl get svc -n monitoring monitoring-prometheus-server -o jsonpath='{.spec.ports[0].nodePort}'"
-        ''',
-        returnStdout: true
-    ).trim()
-
-    env.PROMETHEUS_URL = "http://${env.PUBLIC_IP}:${env.PROMETHEUS_PORT}"
-}
-
-        sh '''
-            curl -s -X POST ${BACKEND_URL}/monitoring/config \
-              -H "Content-Type: application/json" \
-              -d "{\"prometheusUrl\":\"${PROMETHEUS_URL}\"}" || true
-
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d "{\"log\":\"Prometheus URL: ${PROMETHEUS_URL}\"}" || true
-        '''
-    }
-}
         stage('Transfer Docker Image') {
             steps {
                 sh '''
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Transferring Docker image to EC2..."}' || true
-        
+                    python3 -c "import json,sys; print(json.dumps({'log':sys.argv[1]}))" "Starting image export. Retrieving metadata for ${IMAGE_NAME} before saving to tarball..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
+                    START_TIME=$(date +%s)
+
+                    IMAGE_SIZE_BYTES=$(docker inspect "${IMAGE_NAME}" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['Size'] if d else 0)" 2>/dev/null || echo "0")
+                    IMAGE_SIZE_MB=$(echo "$IMAGE_SIZE_BYTES" | awk '{printf "%.1f", $1/1048576}')
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Saving Docker image ${IMAGE_NAME} to tarball. Uncompressed image size: ~${IMAGE_SIZE_MB} MB. Then transferring via SCP to ${PUBLIC_IP} and importing into k3s containerd runtime..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
                     docker save "${IMAGE_NAME}" -o image.tar
-        
+
+                    TAR_SIZE=$(du -sh image.tar | cut -f1)
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Image tarball created: image.tar | Size on disk: ${TAR_SIZE} | Beginning SCP transfer to ${SSH_USER}@${PUBLIC_IP}:~/image.tar..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+
                     scp \
                         -o StrictHostKeyChecking=no \
                         -i "${SSH_KEY}" \
                         image.tar \
                         ${SSH_USER}@${PUBLIC_IP}:~/image.tar
-        
-                    # Import image into k3s containerd (not Docker)
-                    ssh \
+
+                    IMPORT_OUTPUT=$(ssh \
                         -o StrictHostKeyChecking=no \
                         -i "${SSH_KEY}" \
                         ${SSH_USER}@${PUBLIC_IP} \
-                        "sudo k3s ctr images import ~/image.tar"
-        
-                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                      -H "Content-Type: application/json" \
-                      -d '{"log":"Docker image transferred and imported into k3s successfully."}' || true
+                        "sudo k3s ctr images import ~/image.tar 2>&1 && rm -f ~/image.tar && echo IMPORT_OK")
+
+                    END_TIME=$(date +%s)
+                    ELAPSED=$((END_TIME - START_TIME))
+
+                    IMPORTED_REF=$(echo "$IMPORT_OUTPUT" | grep -o 'docker.io[^ ]*' | head -1 || echo "${IMAGE_NAME}")
+
+                    MSG="Image transfer and import complete in ${ELAPSED}s. Tar size: ${TAR_SIZE} | Imported into k3s containerd as: $IMPORTED_REF | Tarball removed from EC2 after import"
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
                 '''
             }
         }
 
         stage('Deploy to Kubernetes') {
-    steps {
-        sh '''
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d '{"log":"Deploying application to Kubernetes..."}' || true
+            steps {
+                sh '''
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Deploying ${IMAGE_NAME} to k3s Kubernetes on ${PUBLIC_IP}. Creating Deployment and NodePort Service with resource name: ${RESOURCE_NAME}. Any prior deployment/service with this name will be removed first to ensure a clean rollout..." | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
 
-            ssh \
-                -o StrictHostKeyChecking=no \
-                -i "${SSH_KEY}" \
-                ${SSH_USER}@${PUBLIC_IP} <<EOF
-set -e
-
-sudo k3s kubectl delete deployment ${RESOURCE_NAME} --ignore-not-found
-sudo k3s kubectl delete service ${RESOURCE_NAME} --ignore-not-found
-
-sudo k3s kubectl create deployment ${RESOURCE_NAME} \
-  --image=${IMAGE_NAME}
-
-sudo k3s kubectl patch deployment ${RESOURCE_NAME} \
-  -p '{"spec":{"template":{"spec":{"containers":[{"name":"react-app","imagePullPolicy":"Never"}]}}}}'
-
-sudo k3s kubectl expose deployment ${RESOURCE_NAME} \
-  --type=NodePort \
-  --port=3000 \
-  --target-port=3000
-
-sudo k3s kubectl rollout status deployment/${RESOURCE_NAME} --timeout=300s
-EOF
-
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d '{"log":"Application deployed to Kubernetes successfully."}' || true
-        '''
-    }
-}
-
-        stage('Get Application URL') {
-    steps {
-        script {
-            env.NODE_PORT = sh(
-                script: '''
                     ssh \
                         -o StrictHostKeyChecking=no \
                         -i "${SSH_KEY}" \
-                        ${SSH_USER}@${PUBLIC_IP} \
-                        "sudo k3s kubectl get service ${RESOURCE_NAME} -o jsonpath='{.spec.ports[0].nodePort}'"
-                ''',
-                returnStdout: true
-            ).trim()
+                        ${SSH_USER}@${PUBLIC_IP} << EOF
+set -e
 
-            env.APP_URL = "http://${env.PUBLIC_IP}:${env.NODE_PORT}"
+RESOURCE_NAME="react-app-${DEPLOYMENT_ID}"
+
+# Delete existing deployment if present
+sudo k3s kubectl delete deployment "\${RESOURCE_NAME}" --ignore-not-found=true
+sudo k3s kubectl delete service "\${RESOURCE_NAME}" --ignore-not-found=true
+echo "Previous deployment/service removed (if existed). Creating new deployment..."
+
+
+# Create deployment
+sudo k3s kubectl create deployment "\${RESOURCE_NAME}" \
+    --image="${IMAGE_NAME}"
+
+# Explicitly set container port to 80 (nginx serves on port 80)
+sudo k3s kubectl patch deployment "\${RESOURCE_NAME}" --type='json' -p='[
+  {"op":"add","path":"/spec/template/spec/containers/0/ports","value":[{"containerPort":80}]}
+]'
+
+# Expose deployment as NodePort
+sudo k3s kubectl expose deployment "\${RESOURCE_NAME}" \
+    --type=NodePort \
+    --port=80 \
+    --target-port=80
+
+# Wait for rollout
+sudo k3s kubectl rollout status deployment/"\${RESOURCE_NAME}" --timeout=300s
+EOF
+
+                    # Collect post-deploy Kubernetes state from the cluster
+                    DEPLOY_INFO=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get deployment ${RESOURCE_NAME} --no-headers 2>/dev/null" 2>/dev/null || echo "unavailable")
+
+                    READY=$(echo "$DEPLOY_INFO" | awk '{print $2}')
+                    UP_TO_DATE=$(echo "$DEPLOY_INFO" | awk '{print $3}')
+                    AVAILABLE=$(echo "$DEPLOY_INFO" | awk '{print $4}')
+
+                    POD_STATUS=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get pods -l app=${RESOURCE_NAME} --no-headers 2>/dev/null" 2>/dev/null || echo "unavailable")
+
+                    POD_NAME=$(echo "$POD_STATUS" | awk '{print $1}')
+                    POD_READY=$(echo "$POD_STATUS" | awk '{print $2}')
+                    POD_STATE=$(echo "$POD_STATUS" | awk '{print $3}')
+                    POD_RESTARTS=$(echo "$POD_STATUS" | awk '{print $4}')
+                    POD_AGE=$(echo "$POD_STATUS" | awk '{print $5}')
+
+                    MSG="Kubernetes deployment complete. Deployment: ${RESOURCE_NAME} | Replicas ready/up-to-date/available: $READY / $UP_TO_DATE / $AVAILABLE | Pod: $POD_NAME | Pod status: $POD_STATE | Containers ready: $POD_READY | Restarts: $POD_RESTARTS | Age: $POD_AGE"
+
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
+                        curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                          -H "Content-Type: application/json" \
+                          -d @- || true
+                '''
+            }
         }
 
-        sh """
-            curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-              -H "Content-Type: application/json" \
-              -d '{"status":"RUNNING","url":"${APP_URL}","log":"Application deployed successfully. URL: ${APP_URL}"}' || true
-        """
-    }
-}
+        stage('Get Application URL') {
+            steps {
+                script {
+                    env.NODE_PORT = sh(
+                        script: '''
+                            ssh \
+                                -o StrictHostKeyChecking=no \
+                                -i "${SSH_KEY}" \
+                                ${SSH_USER}@${PUBLIC_IP} \
+                                "sudo k3s kubectl get service ${RESOURCE_NAME} -o jsonpath='{.spec.ports[0].nodePort}'"
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.APP_URL = "http://${env.PUBLIC_IP}:${env.NODE_PORT}"
+                }
+
+                sh '''
+                    # Verify the app is actually responding before marking RUNNING
+                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${APP_URL}" 2>/dev/null || echo "000")
+
+                    SERVICE_INFO=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get service ${RESOURCE_NAME} --no-headers 2>/dev/null" 2>/dev/null || echo "unavailable")
+
+                    CLUSTER_IP=$(echo "$SERVICE_INFO" | awk '{print $3}')
+                    SVC_PORT_MAP=$(echo "$SERVICE_INFO" | awk '{print $5}')
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d "{\\"status\\":\\"RUNNING\\",\\"url\\":\\"${APP_URL}\\",\\"log\\":\\"Application is live and responding (HTTP $HTTP_CODE). URL: ${APP_URL} | Service: ${RESOURCE_NAME} | ClusterIP: $CLUSTER_IP | Port mapping: $SVC_PORT_MAP | NodePort exposed on EC2 public IP: ${PUBLIC_IP}\\"}"
+                '''
+            }
+        }
+
+        stage('Update Deployment Metadata') {
+            steps {
+                script {
+                    env.POD_NAME = sh(
+                        script: '''
+                            ssh \
+                                -o StrictHostKeyChecking=no \
+                                -i "${SSH_KEY}" \
+                                ${SSH_USER}@${PUBLIC_IP} \
+                                "sudo k3s kubectl get pods -l app=${RESOURCE_NAME} -o jsonpath='{.items[0].metadata.name}'"
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh '''
+                    POD_NODE=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get pod ${POD_NAME} -o jsonpath='{.spec.nodeName}' 2>/dev/null" 2>/dev/null || echo "unknown")
+
+                    POD_IP=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get pod ${POD_NAME} -o jsonpath='{.status.podIP}' 2>/dev/null" 2>/dev/null || echo "unknown")
+
+                    POD_START_TIME=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get pod ${POD_NAME} -o jsonpath='{.status.startTime}' 2>/dev/null" 2>/dev/null || echo "unknown")
+
+                    CONTAINER_IMAGE=$(ssh \
+                        -o StrictHostKeyChecking=no \
+                        -i "${SSH_KEY}" \
+                        ${SSH_USER}@${PUBLIC_IP} \
+                        "sudo k3s kubectl get pod ${POD_NAME} -o jsonpath='{.spec.containers[0].image}' 2>/dev/null" 2>/dev/null || echo "${IMAGE_NAME}")
+
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d "{\\"podName\\":\\"${POD_NAME}\\",\\"imageName\\":\\"${CONTAINER_IMAGE}\\",\\"deploymentName\\":\\"${RESOURCE_NAME}\\",\\"serviceName\\":\\"${RESOURCE_NAME}\\",\\"log\\":\\"Deployment metadata recorded. Pod: ${POD_NAME} | Pod IP: $POD_IP | Scheduled on node: $POD_NODE | Container image: $CONTAINER_IMAGE | Pod started at: $POD_START_TIME | Deployment: ${RESOURCE_NAME} | Service: ${RESOURCE_NAME}\\"}"
+                '''
+            }
+        }
     }
 
     post {
         success {
             sh '''
-                curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                  -H "Content-Type: application/json" \
-                  -d '{"log":"Jenkins pipeline completed successfully."}' || true
+                BUILD_NUM="${BUILD_NUMBER:-unknown}"
+                BUILD_URL_SAFE="${BUILD_URL:-unknown}"
+                python3 -c "import json,sys; print(json.dumps({'log':sys.argv[1]}))" "Jenkins pipeline completed successfully. Deployment ID: ${DEPLOYMENT_ID} | Build #: $BUILD_NUM | Build URL: $BUILD_URL_SAFE | All stages passed. Application is live." | \
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d @- || true
             '''
         }
 
         failure {
             sh '''
-                curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
-                  -H "Content-Type: application/json" \
-                  -d '{"status":"FAILED","log":"Jenkins pipeline failed."}' || true
+                BUILD_NUM="${BUILD_NUMBER:-unknown}"
+                python3 -c "import json,sys; print(json.dumps({'status':'FAILED','log':sys.argv[1]}))" "Jenkins pipeline FAILED. Deployment ID: ${DEPLOYMENT_ID} | Build #: $BUILD_NUM | Build URL: ${BUILD_URL:-unknown}. Check Jenkins console output for full stack trace." | \
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d @- || true
             '''
         }
 
         always {
             sh '''
                 rm -f image.tar || true
+                python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Pipeline post-actions complete. Cleaned up local image.tar artifact from Jenkins workspace." | \
+                    curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
+                      -H "Content-Type: application/json" \
+                      -d @- || true
             '''
         }
     }

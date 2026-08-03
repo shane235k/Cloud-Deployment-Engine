@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: backend
-          image: p377-backend:v1
+          image: p377-backend:v2
           imagePullPolicy: Never
 
           ports:

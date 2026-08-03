@@ -46,8 +46,8 @@ const DeploymentSchema = new mongoose.Schema(
     // Deployment status
     status: {
       type: String,
-      enum: ['BUILDING', 'RUNNING', 'FAILED', 'STOPPED'],
-      default: 'BUILDING',
+      enum: ['QUEUED', 'BUILDING', 'RUNNING', 'FAILED', 'STOPPED', 'CANCELLED', 'ROLLING_BACK'],
+      default: 'QUEUED',
     },
 
     // Runtime details
@@ -55,6 +55,18 @@ const DeploymentSchema = new mongoose.Schema(
     imageName: String,
     deploymentName: String,
     serviceName: String,
+
+    // Jenkins Build Metadata
+    jenkinsBuildNumber: Number,
+    jenkinsBuildUrl: String,
+    jenkinsResult: String,
+    pipelineStartedAt: Date,
+    pipelineFinishedAt: Date,
+
+    // Cancellation & Rollback Metadata
+    cancelledAt: Date,
+    rolledBackFrom: String,
+    rollbackReason: String,
 
     // Deployment logs
     logs: {

@@ -1,0 +1,252 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'TARGET_WORKSPACE', defaultValue: '', description: 'Terraform target workspace name (e.g. worker-1, worker-2)')
+    }
+
+    environment {
+        // Backend API
+        BACKEND_URL = 'http://host.docker.internal:30007'
+
+        // Terraform Directories
+        TF_BASE_DIR   = '/var/jenkins_home/terraform/base'
+        TF_SERVER_DIR = '/var/jenkins_home/terraform/server'
+
+        // SSH
+        SSH_KEY  = '/tmp/p377-key.pem'
+        SSH_USER = 'ubuntu'
+
+        // AWS
+        AWS_PAGER                    = ''
+        AWS_SHARED_CREDENTIALS_FILE  = '/var/jenkins_home/.aws/credentials'
+        AWS_CONFIG_FILE              = '/var/jenkins_home/.aws/config'
+        AWS_DEFAULT_REGION           = 'us-east-2'
+    }
+
+    stages {
+        stage('Verify AWS Credentials') {
+            steps {
+                sh '''
+                    IDENTITY=$(aws sts get-caller-identity 2>&1)
+                    EXIT_CODE=$?
+
+                    ACCOUNT_ID=$(echo "$IDENTITY" | grep -o '"Account": "[^"]*"' | cut -d'"' -f4)
+                    ARN=$(echo "$IDENTITY" | grep -o '"Arn": "[^"]*"' | cut -d'"' -f4)
+                    USER_ID=$(echo "$IDENTITY" | grep -o '"UserId": "[^"]*"' | cut -d'"' -f4)
+
+                    if [ $EXIT_CODE -ne 0 ]; then
+                        echo "AWS credential verification FAILED. Raw error: $IDENTITY"
+                        exit 1
+                    else
+                        echo "AWS credentials verified successfully. Account ID: $ACCOUNT_ID | IAM ARN: $ARN | User ID: $USER_ID | Region: $AWS_DEFAULT_REGION"
+                    fi
+                '''
+            }
+        }
+
+        stage('Prepare SSH Key') {
+            steps {
+                sh '''
+                    set -ex
+                    rm -f /tmp/p377-key.pem || true
+                    cp -v /var/jenkins_home/p377-key.pem /tmp/p377-key.pem
+                    chmod 400 /tmp/p377-key.pem
+                    KEY_FINGERPRINT=$(ssh-keygen -l -f /tmp/p377-key.pem | awk '{print $2, $4}')
+                    echo "SSH key prepared at /tmp/p377-key.pem | Fingerprint: ${KEY_FINGERPRINT}"
+                '''
+            }
+        }
+
+        stage('Provision Base Infrastructure') {
+            steps {
+                sh '''
+                    echo "Initialising Base Terraform in ${TF_BASE_DIR}..."
+                    cd "${TF_BASE_DIR}"
+
+                    terraform init -input=false
+
+                    if [ -f "terraform.tfstate" ]; then
+                        echo "Base terraform.tfstate already exists in ${TF_BASE_DIR}. Skipping Base terraform apply."
+                    else
+                        echo "Base terraform.tfstate not found in ${TF_BASE_DIR}. Executing Base terraform apply..."
+                        terraform apply -auto-approve -input=false
+                        echo "Base shared infrastructure provisioned successfully."
+                    fi
+                '''
+            }
+        }
+
+        stage('Provision Server Infrastructure') {
+            steps {
+                sh '''
+                    echo "Initialising Server Terraform in ${TF_SERVER_DIR}..."
+                    cd "${TF_SERVER_DIR}"
+
+                    WORKSPACE="${TARGET_WORKSPACE}"
+                    if [ -z "${WORKSPACE}" ] || [ "${WORKSPACE}" = "default" ]; then
+                        echo "ERROR: TARGET_WORKSPACE parameter is missing, empty, or set to 'default'. EC2 provisioning inside default workspace is strictly prohibited."
+                        exit 1
+                    fi
+
+                    terraform init -input=false
+
+                    echo "Selected target workspace: ${WORKSPACE}"
+
+                    if terraform workspace list | grep -q "[[:space:]]*${WORKSPACE}$"; then
+                        echo "Workspace '${WORKSPACE}' already exists. Selecting workspace..."
+                        terraform workspace select "${WORKSPACE}"
+                        WS_STATUS="reused"
+                    else
+                        echo "Workspace '${WORKSPACE}' does not exist. Creating new workspace..."
+                        terraform workspace new "${WORKSPACE}"
+                        WS_STATUS="created"
+                    fi
+
+                    ACTIVE_WS=$(terraform workspace show)
+                    if [ "${ACTIVE_WS}" = "default" ]; then
+                        echo "ERROR: Active workspace resolved to 'default'. Provisioning in default workspace is strictly prohibited."
+                        exit 1
+                    fi
+
+                    echo "Current active workspace before terraform apply: ${ACTIVE_WS} (Status: ${WS_STATUS})"
+
+                    terraform apply -auto-approve -input=false
+
+                    echo "Server EC2 infrastructure provisioned successfully via Terraform in workspace '${ACTIVE_WS}'."
+                '''
+            }
+        }
+
+        stage('Get EC2 Outputs') {
+            steps {
+                script {
+                    env.INSTANCE_ID = sh(
+                        script: '''
+                            cd "${TF_SERVER_DIR}"
+                            WORKSPACE="${TARGET_WORKSPACE}"
+                            if [ -z "${WORKSPACE}" ] || [ "${WORKSPACE}" = "default" ]; then
+                                echo "ERROR: Invalid workspace name" && exit 1
+                            fi
+                            terraform workspace select "${WORKSPACE}" >/dev/null 2>&1 || true
+                            terraform output -raw instance_id
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
+                    env.PUBLIC_IP = sh(
+                        script: '''
+                            cd "${TF_SERVER_DIR}"
+                            WORKSPACE="${TARGET_WORKSPACE}"
+                            if [ -z "${WORKSPACE}" ] || [ "${WORKSPACE}" = "default" ]; then
+                                echo "ERROR: Invalid workspace name" && exit 1
+                            fi
+                            terraform workspace select "${WORKSPACE}" >/dev/null 2>&1 || true
+                            terraform output -raw public_ip
+                        ''',
+                        returnStdout: true
+                    ).trim()
+                }
+
+                sh '''
+                    echo "EC2 Instance ID: ${INSTANCE_ID} | Public IP: ${PUBLIC_IP} | Workspace: ${TARGET_WORKSPACE}"
+                '''
+            }
+        }
+
+        stage('Clear SSH Known Host') {
+            steps {
+                sh '''
+                    mkdir -p /var/jenkins_home/.ssh
+                    ssh-keygen -R "${PUBLIC_IP}" -f /var/jenkins_home/.ssh/known_hosts >/dev/null 2>&1 || true
+                    echo "Cleared stale SSH known_hosts entry for ${PUBLIC_IP}."
+                '''
+            }
+        }
+
+        stage('Wait for AWS Status Checks') {
+            steps {
+                sh '''
+                    echo "Waiting for EC2 instance ${INSTANCE_ID} to pass AWS status checks..."
+                    aws ec2 wait instance-status-ok --instance-ids "${INSTANCE_ID}"
+                    echo "EC2 instance ${INSTANCE_ID} passed AWS status checks."
+                '''
+            }
+        }
+
+        stage('Test SSH Connection') {
+            steps {
+                sh '''
+                    echo "Testing SSH connection to ${PUBLIC_IP} as user ${SSH_USER}..."
+                    timeout 300 bash -c '
+                        until ssh \
+                            -o StrictHostKeyChecking=no \
+                            -o ConnectTimeout=10 \
+                            -i "${SSH_KEY}" \
+                            ${SSH_USER}@${PUBLIC_IP} \
+                            "echo SSH Ready" >/dev/null 2>&1
+                        do
+                            echo "Waiting for SSH..."
+                            sleep 10
+                        done
+                    '
+                    echo "SSH connection established successfully to ${PUBLIC_IP}."
+                '''
+            }
+        }
+
+        stage('Wait for K3s') {
+            steps {
+                sh '''
+                    echo "Waiting for k3s cluster to become ready on ${PUBLIC_IP}..."
+                    timeout 900 bash -c '
+                        until ssh \
+                            -o StrictHostKeyChecking=no \
+                            -i "${SSH_KEY}" \
+                            ${SSH_USER}@${PUBLIC_IP} \
+                            "sudo k3s kubectl get nodes >/dev/null 2>&1"
+                        do
+                            echo "Waiting for k3s..."
+                            sleep 10
+                        done
+                    '
+                    echo "k3s cluster is ready on ${PUBLIC_IP}."
+                '''
+            }
+        }
+
+        stage('Register Server') {
+            steps {
+                sh '''
+                    echo "Registering new server ${INSTANCE_ID} (${PUBLIC_IP}) with backend registry..."
+
+                    PAYLOAD=$(python3 -c "import json; print(json.dumps({
+                        'name': '${INSTANCE_ID}',
+                        'instanceId': '${INSTANCE_ID}',
+                        'workspace': '${TARGET_WORKSPACE}',
+                        'publicIp': '${PUBLIC_IP}',
+                        'sshUser': '${SSH_USER}',
+                        'clusterType': 'k3s',
+                        'status': 'HEALTHY'
+                    }))")
+
+                    RESPONSE=$(curl -s -X POST ${BACKEND_URL}/servers/register \
+                        -H "Content-Type: application/json" \
+                        -d "$PAYLOAD")
+
+                    echo "Server registered successfully. Response: $RESPONSE"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Provision Server pipeline completed successfully for workspace '${TARGET_WORKSPACE}'."
+        }
+
+        failure {
+            echo "Provision Server pipeline failed for workspace '${TARGET_WORKSPACE}'."
+        }
+    }
+}

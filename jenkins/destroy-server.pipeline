@@ -1,0 +1,92 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'TARGET_WORKSPACE', defaultValue: '', description: 'Terraform workspace name to destroy (e.g. worker-1)')
+        string(name: 'INSTANCE_ID', defaultValue: '', description: 'AWS EC2 instance ID associated with workspace')
+        string(name: 'SERVER_ID', defaultValue: '', description: 'MongoDB Server document ID')
+    }
+
+    environment {
+        // Backend API
+        BACKEND_URL = 'http://host.docker.internal:30007'
+
+        // Terraform Directories
+        TF_SERVER_DIR = '/var/jenkins_home/terraform/server'
+
+        // AWS
+        AWS_PAGER                    = ''
+        AWS_SHARED_CREDENTIALS_FILE  = '/var/jenkins_home/.aws/credentials'
+        AWS_CONFIG_FILE              = '/var/jenkins_home/.aws/config'
+        AWS_DEFAULT_REGION           = 'us-east-2'
+    }
+
+    stages {
+        stage('Verify AWS Credentials') {
+            steps {
+                sh '''
+                    IDENTITY=$(aws sts get-caller-identity 2>&1)
+                    EXIT_CODE=$?
+
+                    ACCOUNT_ID=$(echo "$IDENTITY" | grep -o '"Account": "[^"]*"' | cut -d'"' -f4)
+                    ARN=$(echo "$IDENTITY" | grep -o '"Arn": "[^"]*"' | cut -d'"' -f4)
+                    USER_ID=$(echo "$IDENTITY" | grep -o '"UserId": "[^"]*"' | cut -d'"' -f4)
+
+                    if [ $EXIT_CODE -ne 0 ]; then
+                        echo "AWS credential verification FAILED. Raw error: $IDENTITY"
+                        exit 1
+                    else
+                        echo "AWS credentials verified successfully. Account ID: $ACCOUNT_ID | IAM ARN: $ARN | User ID: $USER_ID | Region: $AWS_DEFAULT_REGION"
+                    fi
+                '''
+            }
+        }
+
+        stage('Destroy Server Infrastructure') {
+            steps {
+                sh '''
+                    echo "Initialising Server Terraform in ${TF_SERVER_DIR}..."
+                    cd "${TF_SERVER_DIR}"
+
+                    terraform init -input=false
+
+                    WORKSPACE="${TARGET_WORKSPACE}"
+                    echo "Selected target workspace for destruction: ${WORKSPACE}"
+
+                    if ! terraform workspace list | grep -q "[[:space:]]*${WORKSPACE}$"; then
+                        echo "Terraform workspace '${WORKSPACE}' does not exist. Nothing to destroy."
+                        exit 0
+                    fi
+
+                    echo "Selecting workspace '${WORKSPACE}'..."
+                    terraform workspace select "${WORKSPACE}"
+
+                    ACTIVE_WS=$(terraform workspace show)
+                    echo "Starting terraform destroy for workspace '${ACTIVE_WS}' (Instance ID: ${INSTANCE_ID}, Server ID: ${SERVER_ID})..."
+
+                    terraform destroy -auto-approve -input=false
+
+                    echo "AWS server infrastructure destroyed successfully for workspace '${ACTIVE_WS}'."
+
+                    echo "Switching back to default workspace..."
+                    terraform workspace select default
+
+                    echo "Deleting Terraform workspace '${WORKSPACE}'..."
+                    terraform workspace delete "${WORKSPACE}"
+
+                    echo "Terraform workspace '${WORKSPACE}' deleted successfully."
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Destroy Server pipeline completed successfully for workspace '${TARGET_WORKSPACE}'."
+        }
+
+        failure {
+            echo "Destroy Server pipeline failed for workspace '${TARGET_WORKSPACE}'."
+        }
+    }
+}

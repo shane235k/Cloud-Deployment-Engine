@@ -20,6 +20,8 @@ import DeploymentsPage from './pages/DeploymentsPage';
 import DeploymentDetailsPage from './pages/DeploymentDetailsPage';
 import MonitoringPage from './pages/MonitoringPage';
 import RegisterRequestPage from './pages/RegisterRequestPage';
+import AdminDashboardLayout from './admin/AdminDashboardLayout';
+import AdminTestLayout from './admin/AdminTestLayout';
 
 import FeaturesPage from './pages/FeaturesPage';
 import MethodsPage from './pages/MethodsPage';
@@ -27,27 +29,26 @@ import CustomersPage from './pages/CustomersPage';
 import PricingPage from './pages/PricingPage';
 import ChangelogPage from './pages/ChangelogPage';
 import ContactPage from './pages/ContactPage';
-function DashboardLayout({ onLogout, deployments, loading }) {
+
+function DashboardLayout({ onLogout, deployments, loading, userRole }) {
   const location = useLocation();
   const isProfile = location.pathname === '/dashboard/profile';
 
   return (
-    <div className="layout">
-      {!isProfile && <Sidebar onLogout={onLogout} />}
+    <div className="layout" style={{ background: '#000000' }}>
+      {!isProfile && <Sidebar onLogout={onLogout} userRole={userRole} />}
 
-      <div className={`app-body ${isProfile ? 'app-body--fullscreen' : ''}`}>
-        <main className="main-content">
+      <div className={`app-body ${isProfile ? 'app-body--fullscreen' : ''}`} style={{ background: '#000000' }}>
+        <main className="main-content" style={{ background: '#000000' }}>
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard/projects" replace />} />
-            <Route path="/projects" element={<ProjectsPage deployments={deployments} />} />
+            <Route path="/projects" element={<ProjectsPage deployments={deployments} loading={loading} />} />
+            <Route path="/new-project" element={<NewProjectPage />} />
             <Route path="/new" element={<NewProjectPage />} />
-            <Route path="/profile" element={<ProfilePage />} />
-            <Route
-              path="/deployments"
-              element={<DeploymentsPage deployments={deployments} loading={loading} />}
-            />
+            <Route path="/deployments" element={<DeploymentsPage deployments={deployments} loading={loading} />} />
             <Route path="/deployments/:id" element={<DeploymentDetailsPage />} />
-            <Route path="/monitoring" element={<MonitoringPage deployments={deployments} />} />
+            <Route path="/monitoring" element={<MonitoringPage />} />
+            <Route path="/profile" element={<ProfilePage />} />
             <Route path="*" element={<Navigate to="/dashboard/projects" replace />} />
           </Routes>
         </main>
@@ -57,9 +58,11 @@ function DashboardLayout({ onLogout, deployments, loading }) {
 }
 
 export default function App() {
+  const location = useLocation();
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [username, setUsername] = useState('');
+  const [userRole, setUserRole] = useState('user');
   
   const [deployments, setDeployments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -76,30 +79,32 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (authenticated) {
+    if (authenticated && userRole !== 'admin') {
       fetchDeployments();
       const interval = setInterval(fetchDeployments, 60000);
       return () => clearInterval(interval);
     }
-  }, [authenticated]);
+  }, [authenticated, userRole]);
+
+  const verifyAuth = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setCheckingAuth(false);
+      return;
+    }
+    try {
+      const data = await getCurrentUser();
+      setUsername(data.user?.username || '');
+      setUserRole(data.user?.role || 'user');
+      setAuthenticated(true);
+    } catch {
+      localStorage.removeItem('token');
+    } finally {
+      setCheckingAuth(false);
+    }
+  };
 
   useEffect(() => {
-    async function verifyAuth() {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setCheckingAuth(false);
-        return;
-      }
-      try {
-        const data = await getCurrentUser();
-        setUsername(data.user?.username || '');
-        setAuthenticated(true);
-      } catch {
-        localStorage.removeItem('token');
-      } finally {
-        setCheckingAuth(false);
-      }
-    }
     verifyAuth();
   }, []);
 
@@ -112,50 +117,65 @@ export default function App() {
     window.location.href = "/";
   };
 
+  const isAdmin = userRole === 'admin';
+  const isAuthPage = location.pathname === '/login' || location.pathname === '/register-request';
+
   return (
     <div className="app-root">
-      <Navbar authenticated={authenticated} username={username} onLogout={handleLogout} />
+      {!isAuthPage && (
+        <Navbar authenticated={authenticated} username={username} userRole={userRole} onLogout={handleLogout} />
+      )}
       
       <Routes>
-        <Route path="/" element={<LandingPage />} />
+        <Route path="/" element={isAdmin ? <Navigate to="/admin" replace /> : <LandingPage />} />
         <Route path="/features" element={<FeaturesPage />} />
         <Route path="/methods" element={<MethodsPage />} />
         <Route path="/customers" element={<CustomersPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/changelog" element={<ChangelogPage />} />
         <Route path="/contact" element={<ContactPage />} />
+        <Route path="/register-request" element={<RegisterRequestPage />} />
         
         {!authenticated ? (
           <>
-            <Route path="/register-request" element={<RegisterRequestPage />} />
             <Route path="/dashboard/*" element={
               <LoginPage
-                onLogin={(uname) => {
-                  setUsername(uname || '');
-                  setAuthenticated(true);
+                onLogin={() => {
+                  verifyAuth();
                 }}
               />
             } />
             <Route path="/login" element={
               <LoginPage
-                onLogin={(uname) => {
-                  setUsername(uname || '');
-                  setAuthenticated(true);
+                onLogin={() => {
+                  verifyAuth();
                 }}
               />
             } />
           </>
+        ) : isAdmin ? (
+          <Route path="/dashboard/*" element={<Navigate to="/admin" replace />} />
         ) : (
           <Route path="/dashboard/*" element={
             <DashboardLayout 
               onLogout={handleLogout} 
               deployments={deployments} 
               loading={loading} 
+              userRole={userRole}
             />
           } />
         )}
         
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="/test/admin/*" element={<AdminTestLayout />} />
+        
+        <Route path="/admin/*" element={
+          authenticated && isAdmin ? (
+            <AdminDashboardLayout onLogout={handleLogout} />
+          ) : (
+            <Navigate to="/login" replace />
+          )
+        } />
+        <Route path="*" element={<Navigate to={isAdmin ? "/admin" : "/"} replace />} />
       </Routes>
     </div>
   );

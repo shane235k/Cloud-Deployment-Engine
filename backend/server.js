@@ -1,5 +1,6 @@
 const { webcrypto } = require("crypto");
 global.crypto = webcrypto;
+const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
@@ -8,6 +9,16 @@ const bcrypt = require("bcryptjs");
 const User = require("./models/User");
 const RegisterRequest = require("./models/RegisterRequest");
 const Deployment = require('./models/Deployment');
+const scheduler = require("./services/scheduler");
+const serverService = require("./services/serverService");
+const serverMonitor = require("./services/serverMonitor");
+const jenkinsService = require("./services/jenkinsService");
+const deploymentQueueService = require("./services/deploymentQueueService");
+const adminRoutes = require("./routes/adminRoutes");
+const { setupTerminalWebSocket } = require("./services/terminalService");
+
+// Concurrency control for server provisioning
+let isProvisioningInProgress = false;
 const deployToKubernetes = require("./deployToKubernetes");
 const { randomUUID } = require("crypto");
 const UserProfile = require("./models/UserProfile");
@@ -125,6 +136,71 @@ app.get("/monitoring/config", (req, res) => {
     grafanaUrl: runtimeGrafanaUrl,
   });
 });
+
+// Server Registry & Heartbeat Endpoints
+app.post("/servers/register", async (req, res) => {
+  try {
+    const server = await serverService.registerServer(req.body);
+    res.status(201).json(server);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/servers/heartbeat", async (req, res) => {
+  try {
+    const server = await serverService.updateHeartbeat(req.body);
+    if (!server) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+    res.json(server);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/servers", async (req, res) => {
+  try {
+    const servers = await serverService.getAllServers();
+    res.json(servers);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get("/servers/:id", async (req, res) => {
+  try {
+    const server = await serverService.getServerById(req.params.id);
+    if (!server) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+    res.json(server);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch("/servers/:id/status", async (req, res) => {
+  try {
+    const { status } = req.body;
+    if (!status) {
+      return res.status(400).json({ error: "status is required" });
+    }
+    const server = await serverService.updateServerStatus(req.params.id, status);
+    if (!server) {
+      return res.status(404).json({ error: "Server not found" });
+    }
+    res.json(server);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const { requireAdmin } = require("./middleware/authMiddleware");
+
+// Admin Module Routes (Protected: Admin Only)
+app.use("/admin", authenticate, requireAdmin, adminRoutes);
+
 //Profile routes
 app.get("/profile", authenticate, async (req, res) => {
   try {
@@ -310,7 +386,7 @@ app.post("/deploy", async (req, res) => {
     framework: framework || 'react',
     buildCommand: buildCommand || 'npm run build',
     outputDirectory: outputDirectory || 'dist',
-    status: 'BUILDING',
+    status: 'QUEUED',
     logs: [
       'Deployment created',
       `Project Name: ${projectName}`,
@@ -319,36 +395,15 @@ app.post("/deploy", async (req, res) => {
       `Framework: ${framework || 'react'}`,
       `Build Command: ${buildCommand || 'npm run build'}`,
       `Output Directory: ${outputDirectory || 'dist'}`,
-      'Triggering Jenkins pipeline...',
+      'Queued for background processing...',
     ],
   });
 
-  try {
+  // Enqueue deployment job for sequential background execution
+  deploymentQueueService.enqueueDeployment(deploymentId);
 
-    await axios.post(
-      `${process.env.JENKINS_URL}/job/${process.env.JENKINS_JOB}/buildWithParameters`,
-      null,
-      {
-        params: {
-          REPO_URL: repoUrl,
-          DEPLOYMENT_ID: deploymentId,
-        },
-        auth: {
-          username: process.env.JENKINS_USER,
-          password: process.env.JENKINS_TOKEN,
-        },
-      }
-    );
-
-    deployment.logs.push('Jenkins job triggered successfully.');
-    await deployment.save();
-  } catch (error) {
-    deployment.status = 'FAILED';
-    deployment.logs.push('Failed to trigger Jenkins.', error.message);
-    await deployment.save();
-  }
-
-  res.json({
+  // Return 202 Accepted immediately
+  res.status(202).json({
     deploymentId,
     status: deployment.status,
   });
@@ -725,7 +780,7 @@ app.delete("/deployments/:id", async (req, res) => {
           try {
             execSync(`kubectl delete deployment ${deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
             execSync(`kubectl delete service ${deployment.serviceName || deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
-          } catch (_) {}
+          } catch (_) { }
         }
       } catch (k8sErr) {
         console.warn(`Warning: Failed to cleanup Kubernetes resources for deployment ${req.params.id}: ${k8sErr.message}`);
@@ -1036,8 +1091,14 @@ app.get("/test-prometheus", async (req, res) => {
     });
   }
 });
-app.listen(5000, '0.0.0.0', () => {
-  console.log(`KubeDeploy backend running on http://localhost:${PORT}`);
+const httpServer = http.createServer(app);
+setupTerminalWebSocket(httpServer);
+
+httpServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`KubeDeploy backend running on http://0.0.0.0:${PORT}`);
+  console.log("build no recovered");
+  serverMonitor.startMonitoring();
+  deploymentQueueService.resumeQueuedDeployments();
 });
 
 
