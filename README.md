@@ -29,7 +29,7 @@
                      ▼                                                                             ▼
        ┌───────────────────────────┐                                                 ┌───────────────────────────┐
        │   Jenkins CI/CD Server    │                                                 │   30s Telemetry Monitor   │
-       │   (Docker Container)      │                                                 │    (SSH Metrics Agent)    │
+       │   (Docker Container :8080)│                                                 │    (SSH Metrics Agent)    │
        └─────────────┬─────────────┘                                                 └─────────────┬─────────────┘
                      │                                                                             │
         ┌────────────┴────────────┐                                                                │
@@ -96,8 +96,9 @@
 │   │   └── pages/              # User Dashboard (Projects, Deployments, New Project, Monitoring)
 │   └── nginx.conf              # Nginx Reverse Proxy Config for K8s pod
 ├── jenkins/                    # Jenkins Pipelines
-│   ├── provision-server.pipeline # Provisions EC2 node & K3s cluster via Terraform
-│   └── destroy-server.pipeline   # Standalone EC2 node destruction pipeline
+│   ├── kubedeploy-stable-v2.pipeline # Deploy app onto K3s node
+│   ├── deploy-server.pipeline   # Provisions EC2 node & K3s cluster via Terraform
+│   └── destroy-server.pipeline  # Standalone EC2 node destruction pipeline
 └── k8s/                        # Kubernetes Deployment & Service Manifests
     ├── backend-deployment.yaml
     ├── backend-service.yaml
@@ -109,15 +110,15 @@
 
 ## 📋 Prerequisites
 
-Before running the project locally, ensure you have the following installed on your machine:
+Before running the project locally, ensure you have the following installed and running on your machine:
 
 1. **Docker Desktop** (or Docker Engine)
 2. **Minikube** & **`kubectl`** CLI
-3. **Node.js** (v18 or v22) & **npm**
-4. **Terraform CLI** (v1.x+)
-5. **AWS CLI** (configured with AWS credentials: `aws configure`)
-6. **Jenkins** (running locally or in Docker at `http://localhost:8080`)
-7. **AWS SSH Key Pair**: A valid key pair saved as `p377-key.pem`
+3. **Jenkins** running in a Docker container on default port `8080` (`http://localhost:8080`)
+4. **Node.js** (v18 or v22) & **npm**
+5. **Terraform CLI** (v1.x+)
+6. **AWS CLI** (configured with AWS credentials: `aws configure`)
+7. **AWS SSH Key Pair**: A valid EC2 key pair saved as `p377-key.pem`
 
 ---
 
@@ -130,7 +131,7 @@ Create a `.env` file inside the `backend/` directory:
 PORT=5000
 MONGODB_URI=mongodb+srv://<username>:<password>@<cluster>.mongodb.net/kubedeploy?retryWrites=true&w=majority
 
-# Jenkins Configuration
+# Jenkins Configuration (Container running on default port 8080)
 JENKINS_URL=http://host.docker.internal:8080
 JENKINS_USER=your_jenkins_username
 JENKINS_TOKEN=your_jenkins_api_token
@@ -154,6 +155,32 @@ GITHUB_CLIENT_SECRET=your_github_client_secret
 # Frontend Local Port-Forwarding URL
 FRONTEND_URL=http://localhost:30007
 ```
+
+---
+
+## 🔧 Jenkins Setup & Pipeline Configuration
+
+You must run Jenkins inside a Docker container on the default port **`8080`** (`http://localhost:8080`) and configure the 3 required pipelines matching the names specified in your `.env`:
+
+### 1. Run Jenkins Container
+```bash
+docker run -d \
+  --name jenkins \
+  -p 8080:8080 \
+  -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  jenkins/jenkins:lts
+```
+
+### 2. Create the 3 Required Jenkins Pipeline Jobs
+Log into Jenkins at `http://localhost:8080`, create **3 New Items** of type **Pipeline**, and configure them with the corresponding scripts from the `jenkins/` folder:
+
+| Pipeline Job Name (in Jenkins) | `.env` Variable | Source Groovy File in Repo |
+| :--- | :--- | :--- |
+| **`kubedeploy-stable-v2`** | `JENKINS_DEPLOY_JOB` | [jenkins/kubedeploy-stable-v2.pipeline](file:///c:/nvm/COLLEGE/DEVOPS/KubeDeploy/jenkins/kubedeploy-stable-v2.pipeline) |
+| **`deploy-server`** | `JENKINS_PROVISION_JOB` | [jenkins/deploy-server.pipeline](file:///c:/nvm/COLLEGE/DEVOPS/KubeDeploy/jenkins/deploy-server.pipeline) |
+| **`Destroy-Server`** | `JENKINS_DESTROY_JOB` | [jenkins/destroy-server.pipeline](file:///c:/nvm/COLLEGE/DEVOPS/KubeDeploy/jenkins/destroy-server.pipeline) |
 
 ---
 
@@ -185,7 +212,18 @@ docker build -t p377-backend:v2 ./backend
 docker build -t p377-frontend:v2 ./frontend
 ```
 
-### 4. Deploy to Kubernetes
+### 4. Create Kubernetes Secrets
+Before applying Kubernetes deployments, you **MUST** create `backend-secret` from your `.env` file and `p377-ssh-key` from your SSH key file:
+
+```bash
+# 1. Create backend-secret containing environment variables
+kubectl create secret generic backend-secret --from-env-file=./backend/.env
+
+# 2. Create p377-ssh-key containing your EC2 SSH private key
+kubectl create secret generic p377-ssh-key --from-file=p377-key.pem=/path/to/your/p377-key.pem
+```
+
+### 5. Deploy to Kubernetes
 Apply the Kubernetes manifests from the `k8s/` directory:
 
 ```bash
@@ -198,7 +236,7 @@ kubectl get pods
 kubectl get services
 ```
 
-### 5. Expose Application via Port-Forwarding
+### 6. Expose Application via Port-Forwarding
 Forward local port `30007` to the `frontend-service`:
 
 ```bash
@@ -221,7 +259,7 @@ To allow users to connect their GitHub accounts and select repositories:
    - **Homepage URL**: `http://localhost:30007`
    - **Authorization Callback URL**: `http://localhost:30007/auth/github/callback`
 4. Copy the **Client ID** and generate a **Client Secret**.
-5. Paste them into `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in your `backend/.env`.
+5. Paste them into `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in your `backend/.env` (and recreate `backend-secret`).
 
 ---
 
