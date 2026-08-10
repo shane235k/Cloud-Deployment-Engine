@@ -22,3 +22,13 @@ kubedeploy-jenkins
 ## change socket permission 
 
 chmod 666 /var/run/docker.sock
+minikube docker-env | Invoke-Expressio
+
+
+
+
+
+
+
+Moje3194$u@
+aryanS17*
