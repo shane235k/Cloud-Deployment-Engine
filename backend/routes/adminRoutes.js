@@ -3,6 +3,8 @@ const router = express.Router();
 const adminController = require("../controllers/adminController");
 
 // Infrastructure & System routes
+router.get("/infrastructure", adminController.getInfrastructure);
+router.post("/infrastructure", adminController.createInfrastructure);
 router.get("/system", adminController.getSystemSummary);
 router.get("/servers", adminController.getServers);
 router.get("/servers/:id", adminController.getServerById);

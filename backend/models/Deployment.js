@@ -52,9 +52,12 @@ const DeploymentSchema = new mongoose.Schema(
 
     // Runtime details
     url: String,
+    directUrl: String,
+    serverIp: String,
     imageName: String,
     deploymentName: String,
     serviceName: String,
+    ingressName: String,
 
     // Jenkins Build Metadata
     jenkinsBuildNumber: Number,

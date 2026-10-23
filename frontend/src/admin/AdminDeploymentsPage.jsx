@@ -40,16 +40,31 @@ export default function AdminDeploymentsPage() {
   };
 
   if (loading) {
-    return <div className="app-loading">Loading admin deployments...</div>;
+    return (
+      <div className="admin-page-container">
+        <div className="admin-header">
+          <div>
+            <h1 className="page-title">Deployments Overview</h1>
+            <p className="page-subtitle">All application deployments across servers</p>
+          </div>
+        </div>
+        <div className="admin-loading-state">
+          <div className="admin-spinner"></div>
+          <p>Loading admin deployments...</p>
+        </div>
+      </div>
+    );
   }
 
   if (error) {
     return (
       <div className="admin-page-container">
-        <h1 className="page-title">Deployments Overview</h1>
+        <div className="admin-header">
+          <h1 className="page-title">Deployments Overview</h1>
+        </div>
         <div className="error-banner">
           <p>{error}</p>
-          <button className="primary-button" onClick={fetchDeployments}>Retry</button>
+          <button className="primary-button" onClick={fetchDeployments} style={{ marginLeft: '12px' }}>Retry</button>
         </div>
       </div>
     );

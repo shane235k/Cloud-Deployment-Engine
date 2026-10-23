@@ -22,15 +22,25 @@ const ServerSchema = new mongoose.Schema(
     },
     publicIp: {
       type: String,
-      required: true,
+      required: false,
+      default: "",
     },
     privateIp: {
       type: String,
       default: "",
     },
+    nodeRole: {
+      type: String,
+      enum: ["SERVER", "AGENT"],
+      default: "AGENT",
+    },
+    isControlPlane: {
+      type: Boolean,
+      default: false,
+    },
     status: {
       type: String,
-      enum: ["HEALTHY", "BUSY", "OFFLINE"],
+      enum: ["HEALTHY", "BUSY", "OFFLINE", "UNMONITORED"],
       default: "HEALTHY",
     },
     cpuUsage: {

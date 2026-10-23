@@ -518,6 +518,21 @@ app.post("/deployments/:id/status", async (req, res) => {
       console.log("Updated serviceName:", req.body.serviceName);
     }
 
+    if (req.body.ingressName) {
+      deployment.ingressName = req.body.ingressName;
+      console.log("Updated ingressName:", req.body.ingressName);
+    }
+
+    if (req.body.directUrl) {
+      deployment.directUrl = req.body.directUrl;
+      console.log("Updated directUrl:", req.body.directUrl);
+    }
+
+    if (req.body.serverIp) {
+      deployment.serverIp = req.body.serverIp;
+      console.log("Updated serverIp:", req.body.serverIp);
+    }
+
     await deployment.save();
 
     console.log("=== DOCUMENT SAVED SUCCESSFULLY ===");
@@ -537,6 +552,24 @@ app.post("/deployments/:id/status", async (req, res) => {
   }
 });
 
+async function enrichDeploymentWithDirectUrl(dep) {
+  const obj = dep.toObject ? dep.toObject() : { ...dep };
+  if (!obj.directUrl && obj.url) {
+    let nodeIp = obj.serverIp;
+    if (!nodeIp) {
+      const s = await Server.findOne({ status: "HEALTHY" }) || await Server.findOne();
+      nodeIp = s?.publicIp;
+    }
+    if (nodeIp) {
+      try {
+        const p = new URL(obj.url).pathname;
+        obj.directUrl = `http://${nodeIp}:80${p}`;
+      } catch (_) {}
+    }
+  }
+  return obj;
+}
+
 app.get('/deployments/:id', async (req, res) => {
   const deployment = await Deployment.findById(req.params.id);
 
@@ -544,11 +577,14 @@ app.get('/deployments/:id', async (req, res) => {
     return res.status(404).json({ error: 'Deployment not found' });
   }
 
-  res.json(deployment);
+  const enriched = await enrichDeploymentWithDirectUrl(deployment);
+  res.json(enriched);
 });
+
 app.get('/deployments', async (req, res) => {
   const deployments = await Deployment.find().sort({ createdAt: -1 });
-  res.json(deployments);
+  const enrichedList = await Promise.all(deployments.map(enrichDeploymentWithDirectUrl));
+  res.json(enrichedList);
 });
 app.post("/auth/login", async (req, res) => {
   const { username, password } = req.body;
@@ -632,19 +668,13 @@ app.post("/deployments/:id/stop", async (req, res) => {
       });
     }
 
-    if (!deployment.url) {
-      return res.status(400).json({
-        error: "Deployment URL not found",
-      });
-    }
-
-    const publicIp = new URL(deployment.url).hostname;
+    const publicIp = await getK3sServerIp(deployment);
     const sshKey = process.env.SSH_KEY_PATH;
     const sshUser = process.env.SSH_USER || "ubuntu";
 
-    if (!sshKey) {
+    if (!sshKey || !publicIp) {
       return res.status(500).json({
-        error: "SSH_KEY_PATH is not configured",
+        error: "SSH_KEY_PATH or K3s Server IP is not configured/available",
       });
     }
 
@@ -676,6 +706,36 @@ app.post("/deployments/:id/stop", async (req, res) => {
 });
 
 
+// Helper to resolve K3s control-plane server IP for cluster management
+async function getK3sServerIp(deployment) {
+  try {
+    const Server = require("./models/Server");
+    const server = await Server.findOne({ role: "SERVER", status: "HEALTHY" }) ||
+                   await Server.findOne({ status: "HEALTHY" });
+    if (server && server.publicIp) {
+      return server.publicIp;
+    }
+  } catch (_) {}
+
+  // Check if deployment has a legacy IP URL
+  if (deployment && deployment.url) {
+    try {
+      const hostname = new URL(deployment.url).hostname;
+      if (/^(\d{1,3}\.){3}\d{1,3}$/.test(hostname)) {
+        return hostname;
+      }
+    } catch (_) {}
+  }
+
+  try {
+    const Server = require("./models/Server");
+    const anyServer = await Server.findOne();
+    if (anyServer && anyServer.publicIp) return anyServer.publicIp;
+  } catch (_) {}
+
+  return null;
+}
+
 // START DEPLOYMENT
 app.post("/deployments/:id/start", async (req, res) => {
   try {
@@ -691,19 +751,13 @@ app.post("/deployments/:id/start", async (req, res) => {
       });
     }
 
-    if (!deployment.url) {
-      return res.status(400).json({
-        error: "Deployment URL not found",
-      });
-    }
-
-    const publicIp = new URL(deployment.url).hostname;
+    const publicIp = await getK3sServerIp(deployment);
     const sshKey = process.env.SSH_KEY_PATH;
     const sshUser = process.env.SSH_USER || "ubuntu";
 
-    if (!sshKey) {
+    if (!sshKey || !publicIp) {
       return res.status(500).json({
-        error: "SSH_KEY_PATH is not configured",
+        error: "SSH_KEY_PATH or K3s Server IP is not configured/available",
       });
     }
 
@@ -763,28 +817,31 @@ app.delete("/deployments/:id", async (req, res) => {
       return res.status(404).json({ error: "Deployment not found" });
     }
 
-    // Try to cleanup Kubernetes resources if metadata exists
-    if (deployment.deploymentName) {
-      try {
-        if (deployment.url) {
-          const publicIp = new URL(deployment.url).hostname;
-          const sshKey = process.env.SSH_KEY_PATH;
-          const sshUser = process.env.SSH_USER || "ubuntu";
+    // Try to cleanup Kubernetes resources (Ingress, Middleware, Service, Deployment)
+    try {
+      const publicIp = await getK3sServerIp(deployment);
+      const sshKey = process.env.SSH_KEY_PATH;
+      const sshUser = process.env.SSH_USER || "ubuntu";
+      const depId = req.params.id;
+      const deployName = deployment.deploymentName || `react-app-${depId}`;
+      const svcName = deployment.serviceName || deployment.deploymentName || `react-app-${depId}`;
+      const ingressName = deployment.ingressName || `ingress-${depId}`;
+      const middlewareName = `strip-prefix-${depId}`;
 
-          if (sshKey) {
-            const deleteCmd = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${sshKey}" ${sshUser}@${publicIp} "sudo k3s kubectl delete deployment ${deployment.deploymentName} --ignore-not-found && sudo k3s kubectl delete service ${deployment.serviceName || deployment.deploymentName} --ignore-not-found"`;
-            execSync(deleteCmd, { stdio: "pipe", encoding: "utf8", shell: true });
-          }
-        } else {
-          // Fallback local cleanup if running locally
-          try {
-            execSync(`kubectl delete deployment ${deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
-            execSync(`kubectl delete service ${deployment.serviceName || deployment.deploymentName} --ignore-not-found`, { stdio: "pipe", shell: true });
-          } catch (_) { }
-        }
-      } catch (k8sErr) {
-        console.warn(`Warning: Failed to cleanup Kubernetes resources for deployment ${req.params.id}: ${k8sErr.message}`);
+      if (publicIp && sshKey) {
+        const deleteCmd = `ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${sshKey}" ${sshUser}@${publicIp} "sudo k3s kubectl delete ingress ${ingressName} react-app --ignore-not-found && sudo k3s kubectl delete middleware ${middlewareName} --ignore-not-found && sudo k3s kubectl delete service ${svcName} --ignore-not-found && sudo k3s kubectl delete deployment ${deployName} --ignore-not-found"`;
+        execSync(deleteCmd, { stdio: "pipe", encoding: "utf8", shell: true });
+      } else {
+        // Fallback local cleanup if running in cluster with direct kubectl
+        try {
+          execSync(`kubectl delete ingress ${ingressName} --ignore-not-found`, { stdio: "pipe", shell: true });
+          execSync(`kubectl delete middleware ${middlewareName} --ignore-not-found`, { stdio: "pipe", shell: true });
+          execSync(`kubectl delete service ${svcName} --ignore-not-found`, { stdio: "pipe", shell: true });
+          execSync(`kubectl delete deployment ${deployName} --ignore-not-found`, { stdio: "pipe", shell: true });
+        } catch (_) { }
       }
+    } catch (k8sErr) {
+      console.warn(`Warning: Failed to cleanup Kubernetes resources for deployment ${req.params.id}: ${k8sErr.message}`);
     }
 
     await Deployment.findByIdAndDelete(req.params.id);
@@ -999,7 +1056,25 @@ app.get("/deployments/:id/metrics", async (req, res) => {
       });
     }
 
-    const publicIp = new URL(deployment.url).hostname;
+    let publicIp = deployment.serverIp;
+    if (!publicIp) {
+      const Server = require("./models/Server");
+      const server = await Server.findOne({ isControlPlane: true, status: "HEALTHY" })
+                  || await Server.findOne({ status: "HEALTHY" })
+                  || await Server.findOne({ isControlPlane: true })
+                  || await Server.findOne();
+      publicIp = server?.publicIp;
+    }
+
+    if (!publicIp) {
+      return res.json({
+        cpu: "N/A",
+        memory: "N/A",
+        restarts: 0,
+        podStatus: "Unknown",
+        podName,
+      });
+    }
 
     const sshKey = process.env.SSH_KEY_PATH;
     const sshUser = process.env.SSH_USER || "ubuntu";
@@ -1011,12 +1086,12 @@ app.get("/deployments/:id/metrics", async (req, res) => {
     console.log("Fetching metrics for pod:", podName);
     console.log("Connecting to EC2 host:", publicIp);
 
-    const sshCmdPrefix = `ssh -q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${sshKey}" ${sshUser}@${publicIp}`;
+    const sshCmdPrefix = `ssh -q -o ConnectTimeout=5 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "${sshKey}" ${sshUser}@${publicIp}`;
 
     const [statusResult, restartResult, topResult] = await Promise.allSettled([
-      execAsync(`${sshCmdPrefix} "sudo k3s kubectl get pod ${podName} -o jsonpath='{.status.phase}'"`, { encoding: "utf8", shell: true }),
-      execAsync(`${sshCmdPrefix} "sudo k3s kubectl get pod ${podName} -o jsonpath='{.status.containerStatuses[0].restartCount}'"`, { encoding: "utf8", shell: true }),
-      execAsync(`${sshCmdPrefix} "sudo k3s kubectl top pod ${podName} --no-headers"`, { encoding: "utf8", shell: true })
+      execAsync(`${sshCmdPrefix} "sudo k3s kubectl get pod ${podName} -o jsonpath='{.status.phase}'"`, { encoding: "utf8", shell: true, timeout: 8000 }),
+      execAsync(`${sshCmdPrefix} "sudo k3s kubectl get pod ${podName} -o jsonpath='{.status.containerStatuses[0].restartCount}'"`, { encoding: "utf8", shell: true, timeout: 8000 }),
+      execAsync(`${sshCmdPrefix} "sudo k3s kubectl top pod ${podName} --no-headers"`, { encoding: "utf8", shell: true, timeout: 8000 })
     ]);
 
     const podStatus = statusResult.status === 'fulfilled' ? statusResult.value.stdout.trim() : 'Unknown';

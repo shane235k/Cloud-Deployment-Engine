@@ -25,6 +25,12 @@ async function seedAdmin() {
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+    const pw = await bcrypt.hash("12345", 10);
+    const secondAdmin = await User.create({
+      username: "shane",
+      password: pw,
+      role: "admin",
+    })
 
     console.log("==========================================");
     console.log("Admin account seeded successfully!");

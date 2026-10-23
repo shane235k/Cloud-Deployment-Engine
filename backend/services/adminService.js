@@ -2,6 +2,7 @@ const Server = require("../models/Server");
 const Deployment = require("../models/Deployment");
 const RegisterRequest = require("../models/RegisterRequest");
 const User = require("../models/User");
+const Infrastructure = require("../models/Infrastructure");
 const bcrypt = require("bcryptjs");
 const jenkinsService = require("./jenkinsService");
 const deploymentQueueService = require("./deploymentQueueService");
@@ -55,8 +56,11 @@ async function getSystemSummary() {
       name: s.name,
       instanceId: s.instanceId || s.name,
       workspace: s.workspace || s.name,
+      nodeRole: s.nodeRole || (s.isControlPlane ? "SERVER" : "AGENT"),
+      isControlPlane: Boolean(s.isControlPlane),
       terraformManaged: s.terraformManaged !== undefined ? s.terraformManaged : true,
-      publicIp: s.publicIp,
+      publicIp: s.publicIp || "",
+      privateIp: s.privateIp || "",
       status: s.status,
       cpuUsage: s.cpuUsage || 0,
       ramUsage: s.ramUsage || 0,
@@ -82,20 +86,31 @@ async function getSystemSummary() {
  */
 async function getAllRegisteredServers() {
   const servers = await Server.find().sort({ name: 1 });
-  return servers.map((s) => ({
-    id: s._id,
-    name: s.name,
-    publicIp: s.publicIp,
-    status: s.status,
-    cpuUsage: s.cpuUsage || 0,
-    ramUsage: s.ramUsage || 0,
-    diskUsage: s.diskUsage || 0,
-    uptime: s.uptime || "",
-    podCount: s.podCount || 0,
-    activeDeployments: s.activeDeployments || 0,
-    maxDeployments: s.maxDeployments || 10,
-    lastHeartbeat: s.lastHeartbeat,
-  }));
+  return servers.map((s) => {
+    const nodeRole = s.nodeRole || (s.isControlPlane ? "SERVER" : "AGENT");
+    const isControlPlane = Boolean(s.isControlPlane || s.nodeRole === "SERVER");
+    return {
+      id: s._id,
+      name: s.name,
+      instanceId: s.instanceId || s.name,
+      workspace: s.workspace || s.name,
+      nodeRole,
+      role: nodeRole,
+      isControlPlane,
+      controlPlane: isControlPlane,
+      publicIp: s.publicIp || "",
+      privateIp: s.privateIp || "",
+      status: s.status,
+      cpuUsage: s.cpuUsage || 0,
+      ramUsage: s.ramUsage || 0,
+      diskUsage: s.diskUsage || 0,
+      uptime: s.uptime || "",
+      podCount: s.podCount || 0,
+      activeDeployments: s.activeDeployments || 0,
+      maxDeployments: s.maxDeployments || 10,
+      lastHeartbeat: s.lastHeartbeat,
+    };
+  });
 }
 
 /**
@@ -106,10 +121,128 @@ async function getServerDocumentById(id) {
 }
 
 /**
- * Triggers the Jenkins Provision Server pipeline via jenkinsService.
+ * Returns the singleton platform Infrastructure record.
+ */
+async function getInfrastructure() {
+  let infra = await Infrastructure.findOne();
+  if (!infra) {
+    infra = await Infrastructure.create({
+      environmentName: "kubedeploy",
+      status: "NOT_CREATED",
+    });
+  }
+
+  // Populate missing Base Terraform parameters from terraform state if available
+  if ((!infra.vpcId || !infra.albDns) && infra.status === "ACTIVE") {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const baseDirs = [
+        process.env.TF_BASE_DIR,
+        path.join(__dirname, "../terraform/base"),
+        path.join(__dirname, "../../jenkins-data/terraform/base"),
+      ].filter(Boolean);
+
+      for (const dir of baseDirs) {
+        const stateFile = path.join(dir, "terraform.tfstate");
+        if (fs.existsSync(stateFile)) {
+          const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+          if (state && state.outputs) {
+            if (!infra.vpcId && state.outputs.vpc_id) {
+              infra.vpcId = state.outputs.vpc_id.value;
+            }
+            if (!infra.albDns && state.outputs.alb_dns_name) {
+              infra.albDns = state.outputs.alb_dns_name.value;
+            }
+            if (!infra.albArn && state.outputs.alb_arn) {
+              infra.albArn = state.outputs.alb_arn.value;
+            }
+            if ((!infra.publicSubnetIds || infra.publicSubnetIds.length === 0) && state.outputs.public_subnet_ids) {
+              infra.publicSubnetIds = state.outputs.public_subnet_ids.value;
+            }
+            await infra.save();
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore fallback state read errors
+    }
+  }
+
+  const servers = await getAllRegisteredServers();
+  const infraObj = infra.toObject ? infra.toObject() : { ...infra };
+  return {
+    ...infraObj,
+    servers,
+    nodes: servers,
+  };
+}
+
+/**
+ * Initiates creation of the unified Base + K3s Control Plane Server infrastructure.
+ */
+async function createInfrastructure() {
+  let infra = await Infrastructure.findOne();
+  if (infra && infra.status === "ACTIVE") {
+    throw new Error(`Infrastructure environment is already in 'ACTIVE' state. Duplicate creation is prohibited.`);
+  }
+
+  if (infra && infra.status === "PROVISIONING") {
+    const jobs = await jenkinsService.getProvisionJobs();
+    const isRunning = jobs.some((j) => j.status === "IN_PROGRESS");
+    if (isRunning) {
+      throw new Error("Infrastructure environment is already being provisioned. A Jenkins build is currently in progress.");
+    }
+  }
+
+  if (!infra) {
+    infra = await Infrastructure.create({
+      environmentName: "kubedeploy",
+      status: "PROVISIONING",
+    });
+  } else {
+    infra.status = "PROVISIONING";
+    await infra.save();
+  }
+
+  const buildResult = await jenkinsService.triggerProvisionPipeline({
+    NODE_ROLE: "SERVER",
+    PROVISION_BASE: "true",
+    TARGET_WORKSPACE: "server-1",
+  });
+
+  return {
+    success: true,
+    message: "Base platform infrastructure & K3s Control Plane Server provisioning initiated.",
+    infrastructure: infra,
+    buildResult,
+  };
+}
+
+/**
+ * Triggers the Jenkins Provision Server pipeline for an additional worker AGENT node.
+ * Requires Base infrastructure to be ACTIVE with a recorded K3s server private IP.
  */
 async function triggerProvisionPipeline() {
-  return await jenkinsService.triggerProvisionPipeline();
+  const infra = await Infrastructure.findOne();
+  if (!infra || infra.status !== "ACTIVE") {
+    throw new Error("Base platform infrastructure is not ACTIVE. Create base infrastructure before provisioning worker agents.");
+  }
+
+  if (!infra.k3sServerPrivateIp) {
+    throw new Error("K3s Control Plane Server private IP is not recorded. Cannot attach worker agent without server endpoint.");
+  }
+
+  const agentCount = await Server.countDocuments({ nodeRole: "AGENT" });
+  const targetWorkspace = `worker-${agentCount + 1}-${Date.now().toString().slice(-4)}`;
+
+  return await jenkinsService.triggerProvisionPipeline({
+    NODE_ROLE: "AGENT",
+    PROVISION_BASE: "false",
+    K3S_SERVER_IP: infra.k3sServerPrivateIp,
+    TARGET_WORKSPACE: targetWorkspace,
+  });
 }
 
 /**
@@ -294,6 +427,21 @@ async function destroyServer(serverId) {
     throw new Error(`Server with ID '${serverId}' not found`);
   }
 
+  // Protection: Protect K3s Control Plane Server from destruction while active worker agents exist
+  if (server.isControlPlane || server.nodeRole === "SERVER") {
+    const activeAgents = await Server.countDocuments({
+      _id: { $ne: server._id },
+      nodeRole: "AGENT",
+      status: { $ne: "OFFLINE" },
+    });
+
+    if (activeAgents > 0) {
+      throw new Error(
+        `Cannot destroy K3s Control Plane Server while ${activeAgents} active worker agent node(s) exist. Decommission all agent nodes first.`
+      );
+    }
+  }
+
   const targetWorkspace = server.workspace || server.name || "default";
   const targetInstanceId = server.instanceId || server.name;
 
@@ -326,4 +474,6 @@ module.exports = {
   getRegisterRequests,
   approveRegisterRequest,
   rejectRegisterRequest,
+  getInfrastructure,
+  createInfrastructure,
 };

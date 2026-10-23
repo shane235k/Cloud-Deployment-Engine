@@ -1,0 +1,14 @@
+# ==============================================================================
+# Server Node Configuration (Example)
+# ==============================================================================
+# Rename to terraform.tfvars or pass via command line.
+# Note: Key pairs should be created in your AWS EC2 console prior to provisioning.
+
+aws_region    = "us-east-2"
+instance_type = "t3.micro"
+key_name      = "your-ec2-keypair-name"
+instance_name = "kubedeploy-server"
+
+# For Worker Nodes (Agent):
+# is_control_plane      = false
+# k3s_server_private_ip = "10.0.1.X"

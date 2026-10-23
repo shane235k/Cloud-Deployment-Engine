@@ -56,7 +56,15 @@ function setupTerminalWebSocket(httpServer) {
       }
 
       // Fetch target server from MongoDB
-      const server = await Server.findOne({ $or: [{ _id: serverId.match(/^[0-9a-fA-F]{24}$/) ? serverId : null }, { name: serverId }, { publicIp: serverId }] });
+      const server = await Server.findOne({
+        $or: [
+          { _id: serverId.match(/^[0-9a-fA-F]{24}$/) ? serverId : null },
+          { name: serverId },
+          { instanceId: serverId },
+          { workspace: serverId },
+          { publicIp: serverId },
+        ],
+      });
       if (!server) {
         console.error(`[TerminalService] Target server ID ${serverId} not found in MongoDB`);
         ws.send("\r\n\x1b[31m[Error] Target server not found.\x1b[0m\r\n");

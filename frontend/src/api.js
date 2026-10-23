@@ -142,6 +142,21 @@ export async function approveAdminRequest(id) {
   return response.data;
 }
 
+export async function getAdminInfrastructure() {
+  const response = await api.get('/admin/infrastructure');
+  return response.data;
+}
+
+export async function createAdminInfrastructure() {
+  const response = await api.post('/admin/infrastructure');
+  return response.data;
+}
+
+export async function destroyAdminServer(id) {
+  const response = await api.delete(`/admin/servers/${id}`);
+  return response.data;
+}
+
 export async function rejectAdminRequest(id) {
   const response = await api.post(`/admin/requests/${id}/reject`);
   return response.data;

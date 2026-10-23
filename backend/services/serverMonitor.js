@@ -40,7 +40,17 @@ async function fetchServerMetrics(server) {
   const publicIp = server.publicIp;
 
   if (!publicIp) {
-    throw new Error("Target server publicIp is missing");
+    // Private node: Cannot reach via public SSH.
+    // Return UNMONITORED status and avoid marking healthy or offline until in-VPC monitoring is implemented.
+    return {
+      cpuUsage: server.cpuUsage || 0,
+      ramUsage: server.ramUsage || 0,
+      diskUsage: server.diskUsage || 0,
+      uptime: server.uptime || "private-node",
+      podCount: server.podCount || 0,
+      activeDeployments: server.activeDeployments || 0,
+      isPrivateNode: true,
+    };
   }
 
   if (!sshKey) {
@@ -56,8 +66,14 @@ ram=$(free | awk '/Mem:/ {if ($2>0) printf "%.0f", $3/$2 * 100; else print "0"}'
 disk=$(df -P / | awk 'NR==2 {gsub(/%/, ""); print $5}' 2>/dev/null || echo "0")
 up=$(uptime -p 2>/dev/null || uptime 2>/dev/null || echo "unknown")
 
-pods=$(sudo k3s kubectl get pods -n default --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || kubectl get pods -n default --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || echo "0")
-deps=$(sudo k3s kubectl get deployments -n default --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || kubectl get deployments -n default --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || echo "0")
+my_node=$(hostname 2>/dev/null || echo "")
+if [ -n "$my_node" ]; then
+  pods=$(sudo k3s kubectl get pods -n default --field-selector spec.nodeName="$my_node" --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || sudo kubectl get pods -n default --field-selector spec.nodeName="$my_node" --no-headers 2>/dev/null | grep -v 'No resources' | wc -l || echo "0")
+  deps=$(sudo k3s kubectl get pods -n default --field-selector spec.nodeName="$my_node" -o jsonpath='{range .items[*]}{.metadata.labels.app}{"\\n"}{end}' 2>/dev/null | grep -v '^$' | sort -u | wc -l || sudo kubectl get pods -n default --field-selector spec.nodeName="$my_node" -o jsonpath='{range .items[*]}{.metadata.labels.app}{"\\n"}{end}' 2>/dev/null | grep -v '^$' | sort -u | wc -l || echo "0")
+else
+  pods=0
+  deps=0
+fi
 
 echo "CPU:$cpu"
 echo "RAM:$ram"
@@ -123,6 +139,14 @@ async function pollServers() {
           const metrics = await fetchServerMetrics(server);
           const maxDeployments = server.maxDeployments || 10;
           
+          if (metrics.isPrivateNode) {
+            await serverService.recordPollSuccess(server._id, {
+              ...metrics,
+              status: "UNMONITORED",
+            });
+            return;
+          }
+
           // Reconcile capacity from actual user deployments / pods detected on EC2
           const liveActiveCount = Math.max(metrics.activeDeployments, metrics.podCount > 0 ? metrics.podCount : 0);
           const status = liveActiveCount >= maxDeployments ? "BUSY" : "HEALTHY";

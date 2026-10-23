@@ -5,6 +5,7 @@ pipeline {
         string(name: 'REPO_URL', defaultValue: '', description: 'GitHub repository URL')
         string(name: 'DEPLOYMENT_ID', defaultValue: '', description: 'Deployment ID')
         string(name: 'TARGET_SERVER', defaultValue: '', description: 'Target Deployment Server IP')
+        string(name: 'ALB_DNS', defaultValue: 'kubedeploy-alb-881970620.us-east-2.elb.amazonaws.com', description: 'Shared ALB DNS')
     }
 
     environment {
@@ -16,9 +17,15 @@ pipeline {
         SSH_KEY = '/tmp/p377-key.pem'
         SSH_USER = 'ubuntu'
 
+        // Shared ALB
+        ALB_DNS = "${params.ALB_DNS ?: 'kubedeploy-alb-881970620.us-east-2.elb.amazonaws.com'}"
+
         // Resource names
-        IMAGE_NAME    = "react-app:${params.DEPLOYMENT_ID}"
-        RESOURCE_NAME = "react-app-${params.DEPLOYMENT_ID}"
+        DEPLOYMENT_ID   = "${params.DEPLOYMENT_ID}"
+        IMAGE_NAME      = "react-app:${params.DEPLOYMENT_ID}"
+        RESOURCE_NAME   = "react-app-${params.DEPLOYMENT_ID}"
+        INGRESS_NAME    = "ingress-${params.DEPLOYMENT_ID}"
+        MIDDLEWARE_NAME = "strip-prefix-${params.DEPLOYMENT_ID}"
     }
 
     stages {
@@ -69,6 +76,10 @@ pipeline {
                         error("TARGET_SERVER parameter is missing or empty. Cannot proceed with deployment.")
                     }
                     env.PUBLIC_IP = params.TARGET_SERVER.trim()
+                    env.TARGET_NODE = sh(
+                        script: "ssh -o StrictHostKeyChecking=no -i '${env.SSH_KEY}' ${env.SSH_USER}@${env.PUBLIC_IP} 'hostname'",
+                        returnStdout: true
+                    ).trim()
                 }
 
                 sh '''
@@ -162,7 +173,7 @@ pipeline {
         stage('Generate Dockerfile') {
             steps {
                 sh '''
-                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Generating multi-stage Dockerfile. Stage 1 (builder): node:22 ΓÇö will run npm install + npm run build. Stage 2 (runtime): nginx:alpine ΓÇö serves compiled static assets from /usr/share/nginx/html on port 80." | \
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Generating multi-stage Dockerfile. Stage 1 (builder): node:22 — will run npm install + npm run build with subpath base /apps/${DEPLOYMENT_ID}/. Stage 2 (runtime): nginx:alpine — serves compiled static assets from /usr/share/nginx/html on port 80 with SPA fallback routing." | \
                         curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
                           -H "Content-Type: application/json" \
                           -d @- || true
@@ -175,9 +186,33 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
-RUN npm run build
+
+ARG BASE_PATH=/apps/
+ENV PUBLIC_URL=${BASE_PATH}
+ENV BASE_URL=${BASE_PATH}
+
+# Build with deterministic subpath base for Vite/CRA/Next
+RUN if grep -q "vite" package.json 2>/dev/null; then \
+      npm run build -- --base="${BASE_PATH}"; \
+    else \
+      npm run build; \
+    fi
+
+# Normalize dist directory if build was generated
+RUN if [ ! -d "/app/dist" ] && [ -d "/app/build" ]; then cp -r /app/build /app/dist; fi
 
 FROM nginx:alpine
+
+# SPA fallback configuration
+RUN echo 'server { \
+    listen 80; \
+    location / { \
+        root /usr/share/nginx/html; \
+        index index.html index.htm; \
+        try_files $uri $uri/ /index.html; \
+    } \
+}' > /etc/nginx/conf.d/default.conf
+
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
@@ -186,7 +221,7 @@ CMD ["nginx", "-g", "daemon off;"]
 EOF
 
                     LINE_COUNT=$(wc -l < app/Dockerfile)
-                    MSG="Dockerfile written to app/Dockerfile | Lines: $LINE_COUNT | Strategy: multi-stage build (builder ΓåÆ nginx:alpine) | Final image will NOT contain Node.js or node_modules ΓÇö only compiled dist assets are copied to the runtime stage, keeping the image lean"
+                    MSG="Dockerfile written to app/Dockerfile | Lines: $LINE_COUNT | Strategy: multi-stage build (builder → nginx:alpine) | Base path: /apps/${DEPLOYMENT_ID}/"
 
                     python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "$MSG" | \
                         curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
@@ -201,16 +236,15 @@ EOF
                 sh '''
                     START_TIME=$(date +%s)
 
-                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Starting Docker build for image: ${IMAGE_NAME}. Using multi-stage Dockerfile. npm install and npm run build will execute inside the builder stage ΓÇö output streamed below..." | \
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Starting Docker build for image: ${IMAGE_NAME}. Using multi-stage Dockerfile with BASE_PATH=/apps/${DEPLOYMENT_ID}/..." | \
                         curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
                           -H "Content-Type: application/json" \
                           -d @- || true
 
                     cd app
 
-                    # Build with plain progress to capture layer-by-layer output
-                    # Use a subshell to capture exit code without PIPESTATUS (dash-compatible)
-                    docker build --progress=plain -t "${IMAGE_NAME}" . 2>&1 | tee /tmp/docker_build.log; EXIT_CODE=$?
+                    # Build with plain progress and subpath base argument
+                    docker build --progress=plain --build-arg BASE_PATH="/apps/${DEPLOYMENT_ID}/" -t "${IMAGE_NAME}" . 2>&1 | tee /tmp/docker_build.log; EXIT_CODE=$?
                     # If tee swallowed the exit, re-check image existence as fallback
                     docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1 || EXIT_CODE=1
 
@@ -378,7 +412,7 @@ EOF
         stage('Deploy to Kubernetes') {
             steps {
                 sh '''
-                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Deploying ${IMAGE_NAME} to k3s Kubernetes on ${PUBLIC_IP}. Creating Deployment and NodePort Service with resource name: ${RESOURCE_NAME}. Any prior deployment/service with this name will be removed first to ensure a clean rollout..." | \
+                    python3 -c "import json,sys; print(json.dumps({\'log\':sys.argv[1]}))" "Deploying ${IMAGE_NAME} to k3s Kubernetes on ${PUBLIC_IP}. Creating Deployment, ClusterIP Service, Traefik StripPrefix Middleware, and Ingress route on /apps/${DEPLOYMENT_ID}..." | \
                         curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
                           -H "Content-Type: application/json" \
                           -d @- || true
@@ -389,31 +423,85 @@ EOF
                         ${SSH_USER}@${PUBLIC_IP} << EOF
 set -e
 
-RESOURCE_NAME="react-app-${DEPLOYMENT_ID}"
+# Clean up prior resources if present
+sudo k3s kubectl delete ingress "ingress-${DEPLOYMENT_ID}" --ignore-not-found=true
+sudo k3s kubectl delete middleware "strip-prefix-${DEPLOYMENT_ID}" --ignore-not-found=true
+sudo k3s kubectl delete deployment "react-app-${DEPLOYMENT_ID}" --ignore-not-found=true
+sudo k3s kubectl delete service "react-app-${DEPLOYMENT_ID}" --ignore-not-found=true
+echo "Previous deployment/service/ingress removed (if existed). Creating new deployment manifest..."
 
-# Delete existing deployment if present
-sudo k3s kubectl delete deployment "\${RESOURCE_NAME}" --ignore-not-found=true
-sudo k3s kubectl delete service "\${RESOURCE_NAME}" --ignore-not-found=true
-echo "Previous deployment/service removed (if existed). Creating new deployment..."
+# Generate and apply declarative Kubernetes Deployment, ClusterIP Service, Traefik Middleware, and Ingress
+cat << YAML_EOF > /tmp/k3s-app.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: react-app-${DEPLOYMENT_ID}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: react-app-${DEPLOYMENT_ID}
+  template:
+    metadata:
+      labels:
+        app: react-app-${DEPLOYMENT_ID}
+    spec:
+      nodeName: ${TARGET_NODE}
+      containers:
+      - name: react-app
+        image: ${IMAGE_NAME}
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: react-app-${DEPLOYMENT_ID}
+spec:
+  type: ClusterIP
+  selector:
+    app: react-app-${DEPLOYMENT_ID}
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: strip-prefix-${DEPLOYMENT_ID}
+  namespace: default
+spec:
+  stripPrefix:
+    prefixes:
+      - /apps/${DEPLOYMENT_ID}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-${DEPLOYMENT_ID}
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: default-strip-prefix-${DEPLOYMENT_ID}@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+  - http:
+      paths:
+      - path: /apps/${DEPLOYMENT_ID}
+        pathType: Prefix
+        backend:
+          service:
+            name: react-app-${DEPLOYMENT_ID}
+            port:
+              number: 80
+YAML_EOF
 
-
-# Create deployment
-sudo k3s kubectl create deployment "\${RESOURCE_NAME}" \
-    --image="${IMAGE_NAME}"
-
-# Explicitly set container port to 80 (nginx serves on port 80)
-sudo k3s kubectl patch deployment "\${RESOURCE_NAME}" --type='json' -p='[
-  {"op":"add","path":"/spec/template/spec/containers/0/ports","value":[{"containerPort":80}]}
-]'
-
-# Expose deployment as NodePort
-sudo k3s kubectl expose deployment "\${RESOURCE_NAME}" \
-    --type=NodePort \
-    --port=80 \
-    --target-port=80
+sudo k3s kubectl apply -f /tmp/k3s-app.yaml
+rm -f /tmp/k3s-app.yaml
 
 # Wait for rollout
-sudo k3s kubectl rollout status deployment/"\${RESOURCE_NAME}" --timeout=300s
+sudo k3s kubectl rollout status deployment/"react-app-${DEPLOYMENT_ID}" --timeout=300s
 EOF
 
                     # Collect post-deploy Kubernetes state from the cluster
@@ -452,23 +540,22 @@ EOF
         stage('Get Application URL') {
             steps {
                 script {
-                    env.NODE_PORT = sh(
-                        script: '''
-                            ssh \
-                                -o StrictHostKeyChecking=no \
-                                -i "${SSH_KEY}" \
-                                ${SSH_USER}@${PUBLIC_IP} \
-                                "sudo k3s kubectl get service ${RESOURCE_NAME} -o jsonpath='{.spec.ports[0].nodePort}'"
-                        ''',
-                        returnStdout: true
-                    ).trim()
-
-                    env.APP_URL = "http://${env.PUBLIC_IP}:${env.NODE_PORT}"
+                    env.APP_URL = "http://${env.ALB_DNS}/apps/${params.DEPLOYMENT_ID}/"
+                    env.DIRECT_URL = "http://${params.TARGET_SERVER}:80/apps/${params.DEPLOYMENT_ID}/"
                 }
 
                 sh '''
-                    # Verify the app is actually responding before marking RUNNING
-                    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "${APP_URL}" 2>/dev/null || echo "000")
+                    # Verify the app is actually responding through the shared ALB before marking RUNNING
+                    HTTP_CODE="000"
+                    for attempt in $(seq 1 12); do
+                        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${APP_URL}" || echo "000")
+                        if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "301" ] || [ "$HTTP_CODE" = "302" ]; then
+                            echo "ALB responded with HTTP $HTTP_CODE on attempt $attempt"
+                            break
+                        fi
+                        echo "Waiting for ALB ingress route to become ready (attempt $attempt, code: $HTTP_CODE)..."
+                        sleep 3
+                    done
 
                     SERVICE_INFO=$(ssh \
                         -o StrictHostKeyChecking=no \
@@ -477,11 +564,10 @@ EOF
                         "sudo k3s kubectl get service ${RESOURCE_NAME} --no-headers 2>/dev/null" 2>/dev/null || echo "unavailable")
 
                     CLUSTER_IP=$(echo "$SERVICE_INFO" | awk '{print $3}')
-                    SVC_PORT_MAP=$(echo "$SERVICE_INFO" | awk '{print $5}')
 
                     curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
                       -H "Content-Type: application/json" \
-                      -d "{\\"status\\":\\"RUNNING\\",\\"url\\":\\"${APP_URL}\\",\\"log\\":\\"Application is live and responding (HTTP $HTTP_CODE). URL: ${APP_URL} | Service: ${RESOURCE_NAME} | ClusterIP: $CLUSTER_IP | Port mapping: $SVC_PORT_MAP | NodePort exposed on EC2 public IP: ${PUBLIC_IP}\\"}"
+                      -d "{\\"status\\":\\"RUNNING\\",\\"url\\":\\"${APP_URL}\\",\\"directUrl\\":\\"${DIRECT_URL}\\",\\"serverIp\\":\\"${PUBLIC_IP}\\",\\"serviceName\\":\\"${RESOURCE_NAME}\\",\\"deploymentName\\":\\"${RESOURCE_NAME}\\",\\"ingressName\\":\\"ingress-${DEPLOYMENT_ID}\\",\\"log\\":\\"Application is live and responding via ALB (HTTP $HTTP_CODE). URL: ${APP_URL} | Direct Node URL: ${DIRECT_URL} | Service: ${RESOURCE_NAME} (ClusterIP: $CLUSTER_IP) | Ingress: ingress-${DEPLOYMENT_ID} | Traefik StripPrefix: strip-prefix-${DEPLOYMENT_ID}\\"}"
                 '''
             }
         }
@@ -528,7 +614,7 @@ EOF
 
                     curl -s -X POST ${BACKEND_URL}/deployments/${DEPLOYMENT_ID}/status \
                       -H "Content-Type: application/json" \
-                      -d "{\\"podName\\":\\"${POD_NAME}\\",\\"imageName\\":\\"${CONTAINER_IMAGE}\\",\\"deploymentName\\":\\"${RESOURCE_NAME}\\",\\"serviceName\\":\\"${RESOURCE_NAME}\\",\\"log\\":\\"Deployment metadata recorded. Pod: ${POD_NAME} | Pod IP: $POD_IP | Scheduled on node: $POD_NODE | Container image: $CONTAINER_IMAGE | Pod started at: $POD_START_TIME | Deployment: ${RESOURCE_NAME} | Service: ${RESOURCE_NAME}\\"}"
+                      -d "{\\"podName\\":\\"${POD_NAME}\\",\\"imageName\\":\\"${CONTAINER_IMAGE}\\",\\"deploymentName\\":\\"${RESOURCE_NAME}\\",\\"serviceName\\":\\"${RESOURCE_NAME}\\",\\"ingressName\\":\\"ingress-${DEPLOYMENT_ID}\\",\\"url\\":\\"${APP_URL}\\",\\"log\\":\\"Deployment metadata recorded. Pod: ${POD_NAME} | Pod IP: $POD_IP | Scheduled on node: $POD_NODE | Container image: $CONTAINER_IMAGE | Ingress: ingress-${DEPLOYMENT_ID}\\"}"
                 '''
             }
         }

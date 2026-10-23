@@ -98,7 +98,21 @@ export default function AdminServerDetailsPage() {
   }, [id]);
 
   if (loading) {
-    return <div className="app-loading">Loading server details...</div>;
+    return (
+      <div className="admin-page-container">
+        <button
+          className="secondary-button"
+          onClick={() => navigate('/admin/servers')}
+          style={{ marginBottom: '16px' }}
+        >
+          ← Back to Servers
+        </button>
+        <div className="admin-loading-state">
+          <div className="admin-spinner"></div>
+          <p>Loading server details...</p>
+        </div>
+      </div>
+    );
   }
 
   if (error || !server) {

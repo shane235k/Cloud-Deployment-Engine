@@ -14,6 +14,11 @@ provider "aws" {
 }
 
 module "base_infrastructure" {
-  source     = "../modules/base"
-  aws_region = var.aws_region
+  source               = "../modules/base"
+  aws_region           = var.aws_region
+  environment_name     = var.environment_name
+  vpc_cidr             = var.vpc_cidr
+  public_subnet_1_cidr = var.public_subnet_1_cidr
+  public_subnet_2_cidr = var.public_subnet_2_cidr
+  admin_ssh_cidr       = var.admin_ssh_cidr
 }

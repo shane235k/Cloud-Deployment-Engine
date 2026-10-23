@@ -2,7 +2,10 @@ pipeline {
     agent any
 
     parameters {
-        string(name: 'TARGET_WORKSPACE', defaultValue: '', description: 'Terraform target workspace name (e.g. worker-1, worker-2)')
+        choice(name: 'NODE_ROLE', choices: ['SERVER', 'AGENT'], description: 'K3s cluster role for this EC2 instance')
+        string(name: 'PROVISION_BASE', defaultValue: 'false', description: 'Whether to provision/verify Base infrastructure (true for first server, false for agents)')
+        string(name: 'K3S_SERVER_IP', defaultValue: '', description: 'Private IP of existing K3s Control Plane Server (required for AGENT)')
+        string(name: 'TARGET_WORKSPACE', defaultValue: '', description: 'Terraform target workspace name (e.g. server-1, worker-1)')
     }
 
     environment {
@@ -13,8 +16,7 @@ pipeline {
         TF_BASE_DIR   = '/var/jenkins_home/terraform/base'
         TF_SERVER_DIR = '/var/jenkins_home/terraform/server'
 
-        // SSH
-        SSH_KEY  = '/tmp/p377-key.pem'
+        // SSH User
         SSH_USER = 'ubuntu'
 
         // AWS
@@ -45,20 +47,12 @@ pipeline {
             }
         }
 
-        stage('Prepare SSH Key') {
-            steps {
-                sh '''
-                    set -ex
-                    rm -f /tmp/p377-key.pem || true
-                    cp -v /var/jenkins_home/p377-key.pem /tmp/p377-key.pem
-                    chmod 400 /tmp/p377-key.pem
-                    KEY_FINGERPRINT=$(ssh-keygen -l -f /tmp/p377-key.pem | awk '{print $2, $4}')
-                    echo "SSH key prepared at /tmp/p377-key.pem | Fingerprint: ${KEY_FINGERPRINT}"
-                '''
-            }
-        }
-
         stage('Provision Base Infrastructure') {
+            when {
+                expression {
+                    return params.PROVISION_BASE == 'true' || params.NODE_ROLE == 'SERVER'
+                }
+            }
             steps {
                 sh '''
                     echo "Initialising Base Terraform in ${TF_BASE_DIR}..."
@@ -66,12 +60,14 @@ pipeline {
 
                     terraform init -input=false
 
-                    if [ -f "terraform.tfstate" ]; then
-                        echo "Base terraform.tfstate already exists in ${TF_BASE_DIR}. Skipping Base terraform apply."
-                    else
-                        echo "Base terraform.tfstate not found in ${TF_BASE_DIR}. Executing Base terraform apply..."
+                    OUTPUTS=$(terraform output -json 2>/dev/null || echo "{}")
+
+                    if [ "${PROVISION_BASE}" = "true" ] || [ "${OUTPUTS}" = "{}" ]; then
+                        echo "Executing Base terraform apply (PROVISION_BASE=${PROVISION_BASE})..."
                         terraform apply -auto-approve -input=false
                         echo "Base shared infrastructure provisioned successfully."
+                    else
+                        echo "Base shared infrastructure already provisioned with valid outputs. Skipping Base terraform apply."
                     fi
                 '''
             }
@@ -109,9 +105,19 @@ pipeline {
                         exit 1
                     fi
 
-                    echo "Current active workspace before terraform apply: ${ACTIVE_WS} (Status: ${WS_STATUS})"
+                    echo "Current active workspace before terraform apply: ${ACTIVE_WS} (Status: ${WS_STATUS}) | Role: ${NODE_ROLE}"
 
-                    terraform apply -auto-approve -input=false
+                    if [ "${NODE_ROLE}" = "SERVER" ]; then
+                        echo "Provisioning K3s Control Plane Server..."
+                        terraform apply -auto-approve -input=false -var="is_control_plane=true"
+                    else
+                        echo "Provisioning K3s Worker Agent node..."
+                        if [ -z "${K3S_SERVER_IP}" ]; then
+                            echo "ERROR: K3S_SERVER_IP is required when NODE_ROLE is AGENT"
+                            exit 1
+                        fi
+                        terraform apply -auto-approve -input=false -var="is_control_plane=false" -var="k3s_server_private_ip=${K3S_SERVER_IP}"
+                    fi
 
                     echo "Server EC2 infrastructure provisioned successfully via Terraform in workspace '${ACTIVE_WS}'."
                 '''
@@ -134,6 +140,19 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
+                    env.PRIVATE_IP = sh(
+                        script: '''
+                            cd "${TF_SERVER_DIR}"
+                            WORKSPACE="${TARGET_WORKSPACE}"
+                            if [ -z "${WORKSPACE}" ] || [ "${WORKSPACE}" = "default" ]; then
+                                echo "ERROR: Invalid workspace name" && exit 1
+                            fi
+                            terraform workspace select "${WORKSPACE}" >/dev/null 2>&1 || true
+                            terraform output -raw private_ip
+                        ''',
+                        returnStdout: true
+                    ).trim()
+
                     env.PUBLIC_IP = sh(
                         script: '''
                             cd "${TF_SERVER_DIR}"
@@ -142,24 +161,14 @@ pipeline {
                                 echo "ERROR: Invalid workspace name" && exit 1
                             fi
                             terraform workspace select "${WORKSPACE}" >/dev/null 2>&1 || true
-                            terraform output -raw public_ip
+                            terraform output -raw public_ip 2>/dev/null || echo ""
                         ''',
                         returnStdout: true
                     ).trim()
                 }
 
                 sh '''
-                    echo "EC2 Instance ID: ${INSTANCE_ID} | Public IP: ${PUBLIC_IP} | Workspace: ${TARGET_WORKSPACE}"
-                '''
-            }
-        }
-
-        stage('Clear SSH Known Host') {
-            steps {
-                sh '''
-                    mkdir -p /var/jenkins_home/.ssh
-                    ssh-keygen -R "${PUBLIC_IP}" -f /var/jenkins_home/.ssh/known_hosts >/dev/null 2>&1 || true
-                    echo "Cleared stale SSH known_hosts entry for ${PUBLIC_IP}."
+                    echo "EC2 Instance ID: ${INSTANCE_ID} | Private IP: ${PRIVATE_IP} | Public IP: ${PUBLIC_IP} | Workspace: ${TARGET_WORKSPACE} | Role: ${NODE_ROLE}"
                 '''
             }
         }
@@ -167,50 +176,45 @@ pipeline {
         stage('Wait for AWS Status Checks') {
             steps {
                 sh '''
-                    echo "Waiting for EC2 instance ${INSTANCE_ID} to pass AWS status checks..."
+                    echo "Waiting for EC2 instance ${INSTANCE_ID} to pass AWS hardware and OS status checks..."
                     aws ec2 wait instance-status-ok --instance-ids "${INSTANCE_ID}"
                     echo "EC2 instance ${INSTANCE_ID} passed AWS status checks."
                 '''
             }
         }
 
-        stage('Test SSH Connection') {
+        stage('Verify Node Readiness') {
             steps {
                 sh '''
-                    echo "Testing SSH connection to ${PUBLIC_IP} as user ${SSH_USER}..."
-                    timeout 300 bash -c '
-                        until ssh \
-                            -o StrictHostKeyChecking=no \
-                            -o ConnectTimeout=10 \
-                            -i "${SSH_KEY}" \
-                            ${SSH_USER}@${PUBLIC_IP} \
-                            "echo SSH Ready" >/dev/null 2>&1
-                        do
-                            echo "Waiting for SSH..."
-                            sleep 10
-                        done
-                    '
-                    echo "SSH connection established successfully to ${PUBLIC_IP}."
-                '''
-            }
-        }
+                    echo "EC2 instance ${INSTANCE_ID} is active in public subnet."
+                    echo "Public IP: ${PUBLIC_IP} | Private IP: ${PRIVATE_IP} | Role: ${NODE_ROLE} | Workspace: ${TARGET_WORKSPACE}"
+                    echo "K3s node bootstrap is executing internally via IMDSv2 and SSM join token."
+                    echo "Initial server registration status will be UNMONITORED until SSH telemetry is established."
 
-        stage('Wait for K3s') {
-            steps {
-                sh '''
-                    echo "Waiting for k3s cluster to become ready on ${PUBLIC_IP}..."
-                    timeout 900 bash -c '
-                        until ssh \
-                            -o StrictHostKeyChecking=no \
-                            -i "${SSH_KEY}" \
-                            ${SSH_USER}@${PUBLIC_IP} \
-                            "sudo k3s kubectl get nodes >/dev/null 2>&1"
-                        do
-                            echo "Waiting for k3s..."
-                            sleep 10
-                        done
-                    '
-                    echo "k3s cluster is ready on ${PUBLIC_IP}."
+                    if [ "${NODE_ROLE}" = "AGENT" ] && [ -n "${K3S_SERVER_IP}" ]; then
+                        echo "Configuring K3s cluster kubeconfig on Agent node (${PUBLIC_IP})..."
+                        SERVER_PUBLIC_IP=$(python3 -c "
+import urllib.request, json
+try:
+    req = urllib.request.urlopen('${BACKEND_URL}/servers')
+    data = json.loads(req.read().decode())
+    for s in data:
+        if s.get('isControlPlane') or s.get('nodeRole') == 'SERVER':
+            print(s.get('publicIp', ''))
+            break
+except Exception as e:
+    print('')
+")
+                        if [ -n "${SERVER_PUBLIC_IP}" ]; then
+                            echo "Found K3s Control Plane Server at ${SERVER_PUBLIC_IP}. Syncing kubeconfig..."
+                            ssh -o StrictHostKeyChecking=no -i /var/jenkins_home/p377-key.pem ${SSH_USER}@${SERVER_PUBLIC_IP} "sudo cat /etc/rancher/k3s/k3s.yaml" | \
+                                sed "s/127.0.0.1/${K3S_SERVER_IP}/g" > /tmp/agent-k3s.yaml
+                            scp -o StrictHostKeyChecking=no -i /var/jenkins_home/p377-key.pem /tmp/agent-k3s.yaml ${SSH_USER}@${PUBLIC_IP}:/tmp/k3s.yaml
+                            ssh -o StrictHostKeyChecking=no -i /var/jenkins_home/p377-key.pem ${SSH_USER}@${PUBLIC_IP} "sudo mkdir -p /etc/rancher/k3s && sudo mv /tmp/k3s.yaml /etc/rancher/k3s/k3s.yaml && sudo chmod 644 /etc/rancher/k3s/k3s.yaml"
+                            rm -f /tmp/agent-k3s.yaml
+                            echo "Kubeconfig successfully configured on Agent node."
+                        fi
+                    fi
                 '''
             }
         }
@@ -218,16 +222,19 @@ pipeline {
         stage('Register Server') {
             steps {
                 sh '''
-                    echo "Registering new server ${INSTANCE_ID} (${PUBLIC_IP}) with backend registry..."
+                    echo "Registering node ${INSTANCE_ID} (${PRIVATE_IP}, Role: ${NODE_ROLE}) with backend registry..."
 
                     PAYLOAD=$(python3 -c "import json; print(json.dumps({
                         'name': '${INSTANCE_ID}',
                         'instanceId': '${INSTANCE_ID}',
                         'workspace': '${TARGET_WORKSPACE}',
+                        'privateIp': '${PRIVATE_IP}',
                         'publicIp': '${PUBLIC_IP}',
+                        'nodeRole': '${NODE_ROLE}',
+                        'isControlPlane': '${NODE_ROLE}' == 'SERVER',
                         'sshUser': '${SSH_USER}',
                         'clusterType': 'k3s',
-                        'status': 'HEALTHY'
+                        'status': 'UNMONITORED'
                     }))")
 
                     RESPONSE=$(curl -s -X POST ${BACKEND_URL}/servers/register \
@@ -238,15 +245,31 @@ pipeline {
                 '''
             }
         }
+
+        stage('Attach Node to ALB Target Group') {
+            steps {
+                sh '''
+                    echo "Retrieving ALB Target Group ARN from Base Terraform..."
+                    TG_ARN=$(terraform -chdir="${TF_BASE_DIR}" output -raw alb_target_group_arn 2>/dev/null || echo "")
+                    if [ -n "${TG_ARN}" ] && [ "${TG_ARN}" != "None" ]; then
+                        echo "Registering instance ${INSTANCE_ID} on port 80 with Target Group: ${TG_ARN}..."
+                        aws elbv2 register-targets --target-group-arn "${TG_ARN}" --targets Id="${INSTANCE_ID}",Port=80 || true
+                        echo "Target registration command dispatched."
+                    else
+                        echo "Warning: No ALB Target Group ARN found in Base Terraform outputs. Skipping ALB attachment."
+                    fi
+                '''
+            }
+        }
     }
 
     post {
         success {
-            echo "Provision Server pipeline completed successfully for workspace '${TARGET_WORKSPACE}'."
+            echo "Provision Server pipeline completed successfully for workspace '${TARGET_WORKSPACE}' (Role: ${NODE_ROLE})."
         }
 
         failure {
-            echo "Provision Server pipeline failed for workspace '${TARGET_WORKSPACE}'."
+            echo "Provision Server pipeline failed for workspace '${TARGET_WORKSPACE}' (Role: ${NODE_ROLE})."
         }
     }
 }

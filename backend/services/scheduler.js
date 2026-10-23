@@ -22,7 +22,7 @@ const HEARTBEAT_TIMEOUT_MS = 300000; // 5 minutes (300 seconds)
  * Throws an Error if no eligible server exists.
  */
 async function getDeploymentServer() {
-  const servers = await Server.find({ status: { $ne: "OFFLINE" } });
+  const servers = await Server.find({ status: "HEALTHY" });
   const now = Date.now();
 
   if (!servers || servers.length === 0) {
@@ -31,7 +31,7 @@ async function getDeploymentServer() {
 
   // 1. Strict Filter (Fresh Heartbeat within 5 minutes & available capacity)
   let candidates = servers.filter((server) => {
-    if (server.status === "OFFLINE") return false;
+    if (server.status !== "HEALTHY") return false;
 
     const maxCapacity = server.maxDeployments !== undefined ? server.maxDeployments : 10;
     const currentActive = server.activeDeployments || 0;
@@ -42,10 +42,10 @@ async function getDeploymentServer() {
     return heartbeatAge <= HEARTBEAT_TIMEOUT_MS;
   });
 
-  // 2. Fallback Filter: If strict heartbeat check yields no candidates, use any registered non-OFFLINE server with capacity
+  // 2. Fallback Filter: If strict heartbeat check yields no candidates, use any registered HEALTHY server with capacity
   if (candidates.length === 0) {
     candidates = servers.filter((server) => {
-      if (server.status === "OFFLINE") return false;
+      if (server.status !== "HEALTHY") return false;
       const maxCapacity = server.maxDeployments !== undefined ? server.maxDeployments : 10;
       const currentActive = server.activeDeployments || 0;
       return currentActive < maxCapacity;

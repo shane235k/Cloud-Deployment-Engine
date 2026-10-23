@@ -143,16 +143,33 @@ export default function AdminOverviewPage() {
   }, []);
 
   if (loading) {
-    return <div className="app-loading">Loading platform telemetry analytics...</div>;
+    return (
+      <div className="admin-page-container analytics-workspace">
+        <div className="admin-header">
+          <div>
+            <h1 className="page-title">Platform Telemetry & DevOps Analytics</h1>
+            <p className="page-subtitle">
+              Live platform telemetry, cluster node metrics & deployment workloads
+            </p>
+          </div>
+        </div>
+        <div className="admin-loading-state">
+          <div className="admin-spinner"></div>
+          <p>Loading platform telemetry analytics...</p>
+        </div>
+      </div>
+    );
   }
 
   if (error) {
     return (
-      <div className="admin-page-container">
-        <h1 className="page-title">Admin Dashboard</h1>
+      <div className="admin-page-container analytics-workspace">
+        <div className="admin-header">
+          <h1 className="page-title">Platform Telemetry & DevOps Analytics</h1>
+        </div>
         <div className="error-banner">
           <p>{error}</p>
-          <button className="primary-button" onClick={fetchSummary}>Retry</button>
+          <button className="primary-button" onClick={fetchSummary} style={{ marginLeft: '12px' }}>Retry</button>
         </div>
       </div>
     );
@@ -222,14 +239,14 @@ export default function AdminOverviewPage() {
   };
 
   return (
-    <div className="analytics-workspace">
+    <div className="admin-page-container analytics-workspace">
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+      <div className="admin-header" style={{ marginBottom: '20px' }}>
         <div>
-          <h1 style={{ fontSize: '24px', fontWeight: '700', color: '#111827', margin: 0 }}>
+          <h1 className="page-title" style={{ margin: 0 }}>
             Platform Telemetry & DevOps Analytics
           </h1>
-          <p style={{ fontSize: '13px', color: '#6b7280', marginTop: '4px' }}>
+          <p className="page-subtitle" style={{ marginTop: '4px' }}>
             Live platform telemetry, cluster node metrics & deployment workloads
           </p>
         </div>

@@ -1,4 +1,5 @@
 const Deployment = require("../models/Deployment");
+const Infrastructure = require("../models/Infrastructure");
 const scheduler = require("./scheduler");
 const jenkinsService = require("./jenkinsService");
 
@@ -125,11 +126,18 @@ async function executeDeployment(deploymentId) {
       }
     }
 
+    const infra = await Infrastructure.findOne();
+    const albDns = infra?.albDns || "kubedeploy-alb-881970620.us-east-2.elb.amazonaws.com";
+
     // Trigger Jenkins deployment pipeline via jenkinsService
+    deployment.serverIp = server.publicIp;
+    deployment.directUrl = `http://${server.publicIp}:80/apps/${deploymentId}/`;
+
     const triggerRes = await jenkinsService.triggerDeploymentPipeline({
       REPO_URL: deployment.repoUrl,
       DEPLOYMENT_ID: deploymentId,
       TARGET_SERVER: server.publicIp,
+      ALB_DNS: albDns,
     });
 
     deployment.logs.push("Jenkins job triggered successfully.");
@@ -139,12 +147,14 @@ async function executeDeployment(deploymentId) {
     // 1. Poll Jenkins queue until build starts & number is assigned
     const buildInfo = await jenkinsService.waitForBuildStart(triggerRes.queueLocation);
     
-    deployment.jenkinsBuildNumber = buildInfo.buildNumber;
-    deployment.jenkinsBuildUrl = buildInfo.buildUrl;
-    deployment.pipelineStartedAt = new Date();
-    deployment.logs.push(`Build #${buildInfo.buildNumber} started`);
-    deployment.logs.push("Pipeline running");
-    await deployment.save();
+    // Re-fetch in case logs were pushed
+    let currentDep = await Deployment.findById(deploymentId) || deployment;
+    currentDep.jenkinsBuildNumber = buildInfo.buildNumber;
+    currentDep.jenkinsBuildUrl = buildInfo.buildUrl;
+    currentDep.pipelineStartedAt = new Date();
+    currentDep.logs.push(`Build #${buildInfo.buildNumber} started`);
+    currentDep.logs.push("Pipeline running");
+    await currentDep.save();
 
     // 2. Poll Jenkins build until execution completes
     const buildResult = await jenkinsService.waitForBuildCompletion(
@@ -152,24 +162,30 @@ async function executeDeployment(deploymentId) {
       buildInfo.buildNumber
     );
 
-    deployment.jenkinsResult = buildResult.result;
-    deployment.pipelineFinishedAt = new Date();
+    // Re-fetch fresh deployment to prevent overwriting url/podName/serviceName set by Jenkins status updates
+    const freshDeployment = await Deployment.findById(deploymentId) || currentDep;
+
+    freshDeployment.jenkinsResult = buildResult.result;
+    freshDeployment.pipelineFinishedAt = new Date();
 
     if (buildResult.result === "SUCCESS") {
-      deployment.logs.push("Pipeline completed");
-      if (deployment.status !== "FAILED") {
-        deployment.status = "RUNNING";
+      freshDeployment.logs.push("Pipeline completed");
+      if (freshDeployment.status !== "FAILED") {
+        freshDeployment.status = "RUNNING";
       }
     } else {
-      deployment.status = "FAILED";
-      deployment.logs.push("Pipeline failed");
+      freshDeployment.status = "FAILED";
+      freshDeployment.logs.push("Pipeline failed");
     }
 
-    await deployment.save();
+    await freshDeployment.save();
   } catch (error) {
-    deployment.status = "FAILED";
-    deployment.logs.push(`Failed to trigger Jenkins: ${error.message}`);
-    await deployment.save();
+    try {
+      const freshDeployment = await Deployment.findById(deploymentId) || deployment;
+      freshDeployment.status = "FAILED";
+      freshDeployment.logs.push(`Failed to trigger Jenkins: ${error.message}`);
+      await freshDeployment.save();
+    } catch (_) {}
   }
 }
 

@@ -154,10 +154,21 @@ export default function DeploymentDetailsPage() {
           <span className={getStatusClass(deployment.status)} style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             {deployment.status}
           </span>
-          {deployment.url && (
-            <a href={deployment.url} target="_blank" rel="noreferrer" className="vp-btn-primary" style={{ textDecoration: 'none' }}>
+          {deployment.status === 'RUNNING' && deployment.url ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <a href={deployment.url} target="_blank" rel="noreferrer" className="vp-btn-primary" style={{ textDecoration: 'none' }}>
+                Visit <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{marginLeft: '6px'}}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              </a>
+              {/:30\d{3}/.test(deployment.url) && (
+                <span title="Legacy NodePort URL - direct browser access may be blocked by cloud firewall" style={{ fontSize: '11px', background: '#332000', color: '#f59e0b', border: '1px solid #78350f', padding: '3px 7px', borderRadius: '4px' }}>
+                  Legacy URL
+                </span>
+              )}
+            </div>
+          ) : (
+            <button disabled className="vp-btn-primary" style={{ opacity: 0.4, cursor: 'not-allowed', filter: 'grayscale(1)' }} title={deployment.status !== 'RUNNING' ? 'Application is not running' : 'URL not yet available'}>
               Visit <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{marginLeft: '6px'}}><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-            </a>
+            </button>
           )}
           {/* Start / Stop controls */}
           {deployment.status === 'RUNNING' ? (
@@ -269,6 +280,26 @@ export default function DeploymentDetailsPage() {
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '13px' }}>
               <span style={{ color: '#888' }}>Created</span>
               <span style={{ color: '#ededed' }}>{formatDate(deployment.createdAt)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '13px' }}>
+              <span style={{ color: '#888' }}>Public Route</span>
+              {deployment.url ? (
+                <a href={deployment.url} target="_blank" rel="noreferrer" style={{ color: '#388bfd', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }} title={deployment.url}>
+                  {deployment.url.replace(/^https?:\/\//, '')}
+                </a>
+              ) : (
+                <span style={{ color: '#666' }}>Pending</span>
+              )}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px', fontSize: '13px' }}>
+              <span style={{ color: '#888' }}>Direct Route</span>
+              {deployment.directUrl ? (
+                <a href={deployment.directUrl} target="_blank" rel="noreferrer" style={{ color: '#10b981', maxWidth: '160px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: 'none' }} title={deployment.directUrl}>
+                  {deployment.directUrl.replace(/^https?:\/\//, '')}
+                </a>
+              ) : (
+                <span style={{ color: '#666' }}>Pending</span>
+              )}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
               <span style={{ color: '#888' }}>Image</span>

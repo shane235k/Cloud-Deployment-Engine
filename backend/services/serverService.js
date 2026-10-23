@@ -1,4 +1,5 @@
 const Server = require("../models/Server");
+const Infrastructure = require("../models/Infrastructure");
 
 /**
  * Registers a new server or updates an existing server document.
@@ -16,15 +17,19 @@ async function registerServer(data) {
     workspace,
     instanceId,
     terraformManaged,
+    nodeRole,
+    isControlPlane,
   } = data;
 
-  if (!name || !publicIp) {
-    throw new Error("name and publicIp are required for server registration");
+  if (!name || (!publicIp && !privateIp)) {
+    throw new Error("name and at least one valid IP (privateIp or publicIp) are required for server registration");
   }
 
   const targetWorkspace = workspace || name || "default";
   const targetInstanceId = instanceId || name;
   const isTerraformManaged = terraformManaged !== undefined ? Boolean(terraformManaged) : true;
+  const resolvedIsControlPlane = isControlPlane !== undefined ? Boolean(isControlPlane) : nodeRole === "SERVER";
+  const resolvedNodeRole = nodeRole || (resolvedIsControlPlane ? "SERVER" : "AGENT");
 
   let server = null;
 
@@ -33,27 +38,30 @@ async function registerServer(data) {
     server = await Server.findOne({ workspace });
   }
 
-  // Secondary fallback lookup by workspace, instanceId, name, or publicIp
+  // Secondary fallback lookup by workspace, instanceId, name, or private/public IP
   if (!server) {
-    server = await Server.findOne({
-      $or: [
-        { workspace: targetWorkspace },
-        { instanceId: targetInstanceId },
-        { name },
-        { publicIp },
-      ],
-    });
+    const query = [
+      { workspace: targetWorkspace },
+      { instanceId: targetInstanceId },
+      { name },
+    ];
+    if (publicIp) query.push({ publicIp });
+    if (privateIp) query.push({ privateIp });
+
+    server = await Server.findOne({ $or: query });
   }
 
   if (server) {
     server.name = name;
-    server.publicIp = publicIp;
+    if (publicIp !== undefined) server.publicIp = publicIp;
+    if (privateIp !== undefined) server.privateIp = privateIp;
     server.workspace = targetWorkspace;
     server.instanceId = targetInstanceId;
+    server.nodeRole = resolvedNodeRole;
+    server.isControlPlane = resolvedIsControlPlane;
     if (terraformManaged !== undefined) {
       server.terraformManaged = isTerraformManaged;
     }
-    if (privateIp !== undefined) server.privateIp = privateIp;
     if (sshUser !== undefined) server.sshUser = sshUser;
     if (clusterType !== undefined) server.clusterType = clusterType;
     if (maxDeployments !== undefined) server.maxDeployments = maxDeployments;
@@ -62,24 +70,55 @@ async function registerServer(data) {
     server.lastHeartbeat = new Date();
     server.lastPollAttempt = new Date();
     await server.save({ validateBeforeSave: false });
+
+    if (resolvedIsControlPlane && privateIp) {
+      await Infrastructure.findOneAndUpdate(
+        {},
+        {
+          k3sServerPrivateIp: privateIp,
+          controlPlaneInstanceId: targetInstanceId,
+          controlPlaneWorkspace: targetWorkspace,
+          status: "ACTIVE",
+          lastProvisionedAt: new Date(),
+        },
+        { upsert: true, new: true }
+      );
+    }
+
     return server;
   }
 
   server = await Server.create({
     name,
-    publicIp,
+    publicIp: publicIp || "",
     workspace: targetWorkspace,
     instanceId: targetInstanceId,
     terraformManaged: isTerraformManaged,
     privateIp: privateIp || "",
+    nodeRole: resolvedNodeRole,
+    isControlPlane: resolvedIsControlPlane,
     sshUser: sshUser || "ubuntu",
     clusterType: clusterType || "k3s",
     maxDeployments: maxDeployments !== undefined ? maxDeployments : 10,
-    status: status || "HEALTHY",
+    status: status || "UNMONITORED",
     consecutiveFailures: 0,
     lastHeartbeat: new Date(),
     lastPollAttempt: new Date(),
   });
+
+  if (resolvedIsControlPlane && privateIp) {
+    await Infrastructure.findOneAndUpdate(
+      {},
+      {
+        k3sServerPrivateIp: privateIp,
+        controlPlaneInstanceId: targetInstanceId,
+        controlPlaneWorkspace: targetWorkspace,
+        status: "ACTIVE",
+        lastProvisionedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
+  }
 
   return server;
 }

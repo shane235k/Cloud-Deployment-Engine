@@ -170,6 +170,30 @@ async function rejectRequest(req, res) {
   }
 }
 
+/**
+ * Controller for GET /admin/infrastructure
+ */
+async function getInfrastructure(req, res) {
+  try {
+    const infra = await adminService.getInfrastructure();
+    res.json(infra);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+/**
+ * Controller for POST /admin/infrastructure
+ */
+async function createInfrastructure(req, res) {
+  try {
+    const result = await adminService.createInfrastructure();
+    res.status(202).json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 module.exports = {
   getSystemSummary,
   getServers,
@@ -183,4 +207,6 @@ module.exports = {
   getRequests,
   approveRequest,
   rejectRequest,
+  getInfrastructure,
+  createInfrastructure,
 };

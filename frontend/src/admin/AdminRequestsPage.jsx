@@ -90,7 +90,10 @@ export default function AdminRequestsPage() {
       )}
 
       {loading ? (
-        <div className="app-loading">Loading user registration requests...</div>
+        <div className="admin-loading-state">
+          <div className="admin-spinner"></div>
+          <p>Loading user registration requests...</p>
+        </div>
       ) : requests.length === 0 ? (
         <div className="empty-state-card">
           <p>No registration requests submitted yet.</p>

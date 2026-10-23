@@ -1,0 +1,13 @@
+# ==============================================================================
+# Base Infrastructure Configuration (Example)
+# ==============================================================================
+# Rename to terraform.tfvars or pass via command line.
+# Contains NO sensitive credentials (AWS credentials should be supplied via
+# environment variables: AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / IAM role).
+
+aws_region           = "us-east-2"
+environment_name     = "kubedeploy"
+vpc_cidr             = "10.0.0.0/16"
+public_subnet_1_cidr = "10.0.1.0/24"
+public_subnet_2_cidr = "10.0.2.0/24"
+admin_ssh_cidr       = "0.0.0.0/0"
