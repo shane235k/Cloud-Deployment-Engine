@@ -57,71 +57,71 @@ With KubeDeploy, developers connect their GitHub repositories via OAuth, and the
 The system operates across three primary environments: **Client/Developer Layer**, **Local Orchestration Control Plane**, and the **AWS Cloud K3s Cluster**.
 
 ```mermaid
-graph TB
+flowchart TB
     subgraph ClientLayer ["1. CLIENT & DEVELOPER LAYER"]
-        Dev["👨‍💻 Developer / User"]
-        Admin["🛡️ Platform Admin"]
-        GitHub["🐙 GitHub Cloud (OAuth / Git Repo)"]
+        Dev["Developer / User"]
+        Admin["Platform Admin"]
+        GitHub["GitHub Cloud (OAuth & Repos)"]
     end
 
-    subgraph ControlPlane ["2. LOCAL ORCHESTRATION CONTROL PLANE (Minikube / Docker)"]
+    subgraph ControlPlane ["2. LOCAL ORCHESTRATION CONTROL PLANE"]
         direction TB
-        Frontend["🌐 React Frontend (Nginx)<br/>Port: 30007"]
-        Backend["⚙️ Express.js Backend API<br/>Port: 5000"]
-        DB[("🗄️ MongoDB Database<br/>Users / Deployments / Servers")]
-        Scheduler["🧠 Priority Node Scheduler<br/>Active Deployments & Resource Matching"]
-        Monitor["📡 30s SSH Telemetry Monitor<br/>CPU / RAM / Disk / Pods"]
-        Jenkins["🔨 Jenkins CI/CD Controller<br/>Port: 8080 (Docker Container)"]
+        Frontend["React Frontend (Nginx)<br/>Port 30007"]
+        Backend["Express.js Backend API<br/>Port 5000"]
+        DB[("MongoDB Database<br/>Users, Deployments, Servers")]
+        Scheduler["Priority Node Scheduler<br/>Active Workload Balancer"]
+        Monitor["SSH Telemetry Monitor<br/>30s Health Collector"]
+        Jenkins["Jenkins CI/CD Controller<br/>Port 8080"]
 
-        Frontend <-->|REST API / WebSockets| Backend
+        Frontend <-->|"REST API & WebSockets"| Backend
         Backend <--> DB
         Backend --> Scheduler
         Backend --> Monitor
-        Backend -->|Trigger Pipelines| Jenkins
+        Backend -->|"Trigger Pipelines"| Jenkins
     end
 
     subgraph AWSCloud ["3. AWS CLOUD DEPLOYMENT INFRASTRUCTURE (us-east-2)"]
         subgraph VPC ["VPC (10.0.0.0/16) across 2 Availability Zones"]
             direction TB
-            ALB["⚖️ AWS Shared Application Load Balancer<br/>DNS: kubedeploy-alb-xxx.elb.amazonaws.com<br/>Listener: Port 80 (HTTP)"]
-            TG["🎯 ALB Target Group: kubedeploy-tg-http<br/>Target: Port 80 | Health: /ping (200-404)"]
-            SSM["🔑 AWS SSM Parameter Store<br/>/kubedeploy/k3s-join-token (SecureString)"]
+            ALB["AWS Shared Application Load Balancer<br/>Public DNS | Port 80"]
+            TG["ALB Target Group<br/>kubedeploy-tg-http | Port 80"]
+            SSM["AWS SSM Parameter Store<br/>/kubedeploy/k3s-join-token"]
 
             ALB --> TG
 
-            subgraph ServerNode ["EC2: K3s Control Plane Server (Workspace: server-1)"]
+            subgraph ServerNode ["EC2: K3s Control Plane Server (server-1)"]
                 direction TB
-                TraefikMaster["🚦 Traefik Ingress Controller (Port 80)"]
-                K3sMaster["👑 K3s Server Engine (API Port 6443)"]
-                SystemPods["📦 Core DNS & Metrics Server"]
+                TraefikMaster["Traefik Ingress Router<br/>Port 80"]
+                K3sMaster["K3s Server Engine<br/>API Port 6443"]
+                SystemPods["CoreDNS & Metrics Server"]
             end
 
-            subgraph WorkerNode ["EC2: K3s Worker Node (Workspace: worker-N)"]
+            subgraph WorkerNode ["EC2: K3s Worker Node (worker-N)"]
                 direction TB
-                TraefikWorker["🚦 Traefik Ingress Router (Port 80)"]
-                K3sAgent["⚙️ K3s Agent Service"]
-                AppPod1["📦 App Pod: react-app-xxx<br/>Nginx Container (Port 80)"]
-                AppPod2["📦 App Pod: node-app-yyy<br/>Web Container (Port 80)"]
+                TraefikWorker["Traefik Ingress Router<br/>Port 80"]
+                K3sAgent["K3s Agent Service"]
+                AppPod1["App Pod: react-app-xxx<br/>Nginx Container"]
+                AppPod2["App Pod: node-app-yyy<br/>Web Container"]
             end
 
-            TG -->|Forward Port 80| TraefikMaster
-            TG -->|Forward Port 80| TraefikWorker
-            K3sAgent -->|Join Cluster over Private IP| K3sMaster
-            K3sMaster -->|Read/Write Join Token| SSM
-            K3sAgent -->|Read Join Token| SSM
+            TG -->|"Forward Port 80"| TraefikMaster
+            TG -->|"Forward Port 80"| TraefikWorker
+            K3sAgent -->|"Cluster Join on Private IP"| K3sMaster
+            K3sMaster -->|"SSM Token Sync"| SSM
+            K3sAgent -->|"Read SSM Token"| SSM
         end
     end
 
-    Dev -->|Access UI| Frontend
-    Admin -->|Manage Fleet| Frontend
-    Dev -->|Authorize OAuth| GitHub
-    Jenkins -->|Git Clone| GitHub
-    Jenkins -->|SSH Execute / SCP Images / Kubectl| ServerNode
-    Jenkins -->|SSH Execute / SCP Images / Kubectl| WorkerNode
-    Monitor -->|SSH Polling (Port 22)| ServerNode
-    Monitor -->|SSH Polling (Port 22)| WorkerNode
-    Dev -->|Visit App via ALB URL| ALB
-    Dev -->|Visit App via Direct URL| WorkerNode
+    Dev -->|"Access Dashboard"| Frontend
+    Admin -->|"Manage Infrastructure"| Frontend
+    Dev -->|"OAuth Flow"| GitHub
+    Jenkins -->|"Git Clone"| GitHub
+    Jenkins -->|"Deploy via SSH / SCP"| K3sMaster
+    Jenkins -->|"Deploy via SSH / SCP"| K3sAgent
+    Monitor -->|"SSH Telemetry on Port 22"| K3sMaster
+    Monitor -->|"SSH Telemetry on Port 22"| K3sAgent
+    Dev -->|"Visit via Shared ALB Link"| ALB
+    Dev -->|"Visit via Direct Node Link"| TraefikWorker
 ```
 
 ---
@@ -135,12 +135,12 @@ sequenceDiagram
     autonumber
     actor Dev as Developer
     participant UI as React Dashboard
-    participant API as Backend (Express/Mongo)
+    participant API as Backend API
     participant Sched as Node Scheduler
     participant Jenk as Jenkins Pipeline
     participant AWS as AWS EC2 (Terraform)
     participant K3s as K3s & Traefik
-    participant ALB as AWS Application Load Balancer
+    participant ALB as AWS Shared ALB
 
     Dev->>UI: Submit GitHub Repo URL & Framework
     UI->>API: POST /deployments (repoUrl, projectName)
@@ -158,32 +158,28 @@ sequenceDiagram
     Sched-->>API: Target server selected (server.publicIp)
     API->>Jenk: Trigger kubedeploy-stable-v2 (DEPLOYMENT_ID, REPO, TARGET_IP, ALB_DNS)
     
-    rect rgb(20, 25, 35)
-        Note over Jenk: Docker Build & Path Baking
-        Jenk->>Jenk: Git clone application repository
-        Jenk->>Jenk: Generate Multi-Stage Dockerfile with BASE_PATH=/apps/{DEPLOYMENT_ID}/
-        Jenk->>Jenk: npm run build -- --base=/apps/{DEPLOYMENT_ID}/
-        Jenk->>Jenk: Export container image to image.tar
-    end
+    Note over Jenk: Docker Build & Subpath Baking
+    Jenk->>Jenk: Git clone application repository
+    Jenk->>Jenk: Generate Multi-Stage Dockerfile with BASE_PATH=/apps/DEPLOYMENT_ID/
+    Jenk->>Jenk: Build container with Vite base path
+    Jenk->>Jenk: Export container image to image.tar
 
-    Jenk->>K3s: SCP image.tar & k3s ctr images import
+    Jenk->>K3s: Transfer image.tar via SCP and import into containerd
     
-    rect rgb(20, 30, 25)
-        Note over Jenk,K3s: Manifest Synthesis & Ingress Wiring
-        Jenk->>K3s: Apply Deployment (Pod: react-app-{DEPLOYMENT_ID})
-        Jenk->>K3s: Apply Service (ClusterIP: Port 80)
-        Jenk->>K3s: Apply Traefik Middleware (StripPrefix: /apps/{DEPLOYMENT_ID})
-        Jenk->>K3s: Apply Ingress (Route: /apps/{DEPLOYMENT_ID} -> Service)
-    end
+    Note over Jenk,K3s: Manifest Synthesis & Ingress Wiring
+    Jenk->>K3s: Apply Kubernetes Deployment (Pod: react-app-ID)
+    Jenk->>K3s: Apply ClusterIP Service (Port 80)
+    Jenk->>K3s: Apply Traefik Middleware (StripPrefix: /apps/ID)
+    Jenk->>K3s: Apply Ingress (Route: /apps/ID -> Service)
 
-    Jenk->>ALB: Probe http://{ALB_DNS}/apps/{DEPLOYMENT_ID}/ until HTTP 200 OK
-    Jenk->>API: POST /deployments/{id}/status (status: RUNNING, url: ALB_URL, directUrl: DIRECT_URL)
-    API->>UI: Push Status Update via WebSocket / Long Polling
+    Jenk->>ALB: Probe ALB URL until HTTP 200 OK is verified
+    Jenk->>API: POST /deployments/status (status: RUNNING, url: ALB_URL, directUrl: DIRECT_URL)
+    API->>UI: Push Status Update to Dashboard
     
     Note over Dev,ALB: Browser Traffic Resolution
-    Dev->>ALB: GET /apps/{DEPLOYMENT_ID}/index.html
-    ALB->>K3s: Forward Port 80 (Target Group)
-    K3s->>K3s: Traefik matches path & strips /apps/{DEPLOYMENT_ID}
+    Dev->>ALB: GET /apps/DEPLOYMENT_ID/index.html
+    ALB->>K3s: Forward Port 80 to Target Group
+    K3s->>K3s: Traefik matches path rule and strips prefix
     K3s->>K3s: Forward GET /index.html to container
     K3s-->>Dev: HTTP 200 OK (Render React App)
 ```
